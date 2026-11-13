@@ -2,9 +2,12 @@
 """
 Inject FnPatch.dylib into a Fortnite IPA.
 
-Adds Frameworks/FnPatch.dylib and inserts LC_LOAD_DYLIB + LC_RPATH into the main
-Mach-O. Sign straight after with Sideloadly / AltStore / ldid -- the existing
-signature is invalidated by design.
+Copies the dylib to Frameworks/ and inserts LC_LOAD_DYLIB + LC_RPATH into the
+main Mach-O. Every other zip entry is re-emitted with its original ZipInfo, so
+symlinks, permissions and attributes survive untouched.
+
+Sign straight after with Sideloadly / AltStore / SideStore: adding the load
+command invalidates the existing signature by design.
 
 Usage:
     python tools/inject.py --ipa Fortnite_43.10.ipa --dylib FnPatch.dylib \
@@ -14,10 +17,8 @@ Usage:
 import argparse
 import os
 import plistlib
-import shutil
 import struct
 import sys
-import tempfile
 import zipfile
 
 MH_MAGIC_64 = 0xFEEDFACF
@@ -29,6 +30,8 @@ DYLIB_NAME = "FnPatch.dylib"
 DYLIB_INSTALL = "@rpath/" + DYLIB_NAME
 RPATH = "@executable_path/Frameworks"
 
+S_IFLNK = 0o120000
+
 
 def align8(n):
     return (n + 7) & ~7
@@ -38,9 +41,9 @@ def iter_commands(buf, ncmds):
     off = 32
     for _ in range(ncmds):
         cmd, size = struct.unpack_from("<II", buf, off)
-        yield off, cmd, size
         if size < 8:
             raise ValueError(f"corrupt load command at {off:#x}")
+        yield off, cmd, size
         off += size
 
 
@@ -76,26 +79,25 @@ def existing_paths(buf, ncmds):
     return found
 
 
-def build_load_dylib(path: str) -> bytes:
+def build_load_dylib(path):
     raw = path.encode() + b"\x00"
     size = align8(24 + len(raw))
     out = struct.pack("<IIIIII", LC_LOAD_DYLIB, size, 24, 2, 0x10000, 0x10000)
     return out + raw.ljust(size - 24, b"\x00")
 
 
-def build_rpath(path: str) -> bytes:
+def build_rpath(path):
     raw = path.encode() + b"\x00"
     size = align8(12 + len(raw))
     out = struct.pack("<III", LC_RPATH, size, 12)
     return out + raw.ljust(size - 12, b"\x00")
 
 
-def patch_binary(path: str) -> None:
-    with open(path, "rb") as f:
-        buf = bytearray(f.read())
-
-    ncmds, sizeofcmds, lc_end, min_data = macho_metrics(buf)
-    present = existing_paths(buf, ncmds)
+def patch_bytes(buf):
+    """Returns (patched bytes, list of added load command descriptions)."""
+    ba = bytearray(buf)
+    ncmds, sizeofcmds, lc_end, min_data = macho_metrics(ba)
+    present = existing_paths(ba, ncmds)
 
     cmds = b""
     added = []
@@ -107,8 +109,7 @@ def patch_binary(path: str) -> None:
         added.append(f"LC_RPATH {RPATH}")
 
     if not cmds:
-        print("  load commands already present, binary untouched")
-        return
+        return bytes(ba), added
 
     if min_data is None:
         raise SystemExit("cannot determine first section offset")
@@ -119,99 +120,144 @@ def patch_binary(path: str) -> None:
             f"have {space} before first section {min_data:#x}"
         )
 
-    buf[lc_end:lc_end + len(cmds)] = cmds
-    struct.pack_into("<II", buf, 16, ncmds + len(added), sizeofcmds + len(cmds))
+    ba[lc_end:lc_end + len(cmds)] = cmds
+    struct.pack_into("<II", ba, 16, ncmds + len(added), sizeofcmds + len(cmds))
+    return bytes(ba), added
 
-    with open(path, "wb") as f:
-        f.write(buf)
 
+def patch_binary(path):
+    with open(path, "rb") as f:
+        buf = f.read()
+    out, added = patch_bytes(buf)
+    if added:
+        with open(path, "wb") as f:
+            f.write(out)
     for entry in added:
         print(f"  + {entry}")
+    if not added:
+        print("  load commands already present, binary untouched")
 
 
-def find_app_root(root: str) -> str:
-    payload = os.path.join(root, "Payload")
-    if not os.path.isdir(payload):
-        raise SystemExit("Payload/ missing -- not an IPA")
-    apps = [d for d in os.listdir(payload) if d.endswith(".app")]
+def find_app_prefix(names):
+    apps = set()
+    for name in names:
+        parts = name.split("/")
+        if len(parts) >= 2 and parts[0].lower() == "payload" and parts[1].endswith(".app"):
+            apps.add("Payload/" + parts[1])
     if len(apps) != 1:
-        raise SystemExit(f"expected one .app in Payload, found {apps}")
-    return os.path.join(payload, apps[0])
+        raise SystemExit(f"expected one .app in Payload/, found {sorted(apps) or 'none'}")
+    return apps.pop()
 
 
-def bundle_executable(app_dir: str) -> str:
-    with open(os.path.join(app_dir, "Info.plist"), "rb") as f:
-        plist = plistlib.load(f)
-    exe = plist.get("CFBundleExecutable")
-    if not exe:
-        raise SystemExit("Info.plist has no CFBundleExecutable")
-    return os.path.join(app_dir, exe)
-
-
-def repack(root: str, out_path: str) -> None:
-    if os.path.exists(out_path):
-        os.remove(out_path)
-    names = []
-    for base, _dirs, files in os.walk(root):
-        for name in files:
-            full = os.path.join(base, name)
-            names.append((os.path.relpath(full, root).replace(os.sep, "/"), full))
-    names.sort(key=lambda x: (not x[0].endswith(".app/Info.plist"), x[0]))
-
-    total = len(names)
-    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as z:
-        for i, (arc, full) in enumerate(names, 1):
-            z.write(full, arc)
-            if i % 50 == 0 or i == total:
-                print(f"  packed {i}/{total}", end="\r")
-    print()
-
-
-def main() -> None:
+def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ipa", required=True, help="source .ipa")
     ap.add_argument("--dylib", required=True, help="built FnPatch.dylib")
     ap.add_argument("--out", required=True, help="output .ipa")
-    ap.add_argument("--keep", action="store_true", help="keep the extracted tree")
     args = ap.parse_args()
 
     if not os.path.isfile(args.dylib):
         raise SystemExit(f"dylib not found: {args.dylib}")
+    if os.path.abspath(args.ipa) == os.path.abspath(args.out):
+        raise SystemExit("--out must differ from --ipa")
 
-    work = tempfile.mkdtemp(prefix="fnpatch_")
-    try:
-        print(f"[1/5] extracting {os.path.basename(args.ipa)}")
-        with zipfile.ZipFile(args.ipa) as z:
-            z.extractall(work)
+    with open(args.dylib, "rb") as f:
+        dylib_bytes = f.read()
 
-        app = find_app_root(work)
-        exe = bundle_executable(app)
-        print(f"[2/5] app bundle: {os.path.basename(app)}")
-        print(f"      executable: {os.path.basename(exe)}")
+    if os.path.exists(args.out):
+        os.remove(args.out)
 
-        fw = os.path.join(app, "Frameworks")
-        os.makedirs(fw, exist_ok=True)
-        dest = os.path.join(fw, DYLIB_NAME)
-        shutil.copy2(args.dylib, dest)
-        print(f"[3/5] copied dylib -> Frameworks/{DYLIB_NAME}")
+    with zipfile.ZipFile(args.ipa) as src:
+        infos = src.infolist()
+        app = find_app_prefix([i.filename for i in infos])
 
-        print("[4/5] patching load commands")
-        patch_binary(exe)
+        plist = plistlib.loads(src.read(app + "/Info.plist"))
+        exe_name = plist.get("CFBundleExecutable")
+        if not exe_name:
+            raise SystemExit("Info.plist has no CFBundleExecutable")
+        exe_entry = f"{app}/{exe_name}"
 
-        print(f"[5/5] repacking -> {args.out}")
-        repack(work, args.out)
-    finally:
-        if args.keep:
-            print(f"extracted tree kept at {work}")
-        else:
-            shutil.rmtree(work, ignore_errors=True)
+        if exe_entry not in src.namelist():
+            raise SystemExit(f"executable entry missing: {exe_entry}")
+
+        print(f"app bundle : {app}")
+        print(f"executable : {exe_name}")
+        print(f"entries    : {len(infos)}")
+
+        total = len(infos)
+        added_report = []
+
+        with zipfile.ZipFile(args.out, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as dst:
+            for n, info in enumerate(infos, 1):
+                data = src.read(info.filename)
+
+                if info.filename == exe_entry:
+                    data, added = patch_bytes(data)
+                    added_report = added
+
+                out_info = zipfile.ZipInfo(info.filename, date_time=info.date_time)
+                out_info.external_attr = info.external_attr
+                out_info.internal_attr = info.internal_attr
+                out_info.create_system = info.create_system
+                out_info.compress_type = info.compress_type
+
+                is_link = (info.external_attr >> 16) & 0o170000 == S_IFLNK
+                if is_link:
+                    out_info.compress_type = zipfile.ZIP_STORED
+
+                dst.writestr(out_info, data)
+
+                if n % 100 == 0 or n == total:
+                    print(f"  packed {n}/{total}", end="\r")
+            print()
+
+            dest = f"{app}/Frameworks/{DYLIB_NAME}"
+            link = zipfile.ZipInfo(dest)
+            link.date_time = (2024, 1, 1, 0, 0, 0)
+            link.external_attr = 0o100755 << 16
+            link.compress_type = zipfile.ZIP_DEFLATED
+            dst.writestr(link, dylib_bytes)
+
+    for entry in added_report:
+        print(f"  + {entry}")
+    if not added_report:
+        print("  load commands already present, binary untouched")
+    print(f"  + {app}/Frameworks/{DYLIB_NAME}")
+
+    verify(args.out, exe_entry, len(infos), app)
 
     size = os.path.getsize(args.out) / (1024 ** 3)
-    print(f"done: {args.out} ({size:.2f} GB)")
-    print()
-    print("Next: sign it with Sideloadly / AltStore / SideStore.")
-    print("Sideloadly signs the main binary and every nested dylib; do not")
-    print("pre-sign with a different identity or the load will be rejected.")
+    print(f"\ndone: {args.out} ({size:.2f} GB)")
+    print("Next: sign with Sideloadly / AltStore / SideStore. Do not pre-sign with")
+    print("a different identity, or the inserted load command is rejected.")
+
+
+def verify(path, exe_entry, expected_entries, app):
+    print("\nverifying output")
+    with zipfile.ZipFile(path) as zf:
+        names = zf.namelist()
+        ok = True
+
+        def check(cond, msg):
+            nonlocal ok
+            print(("  PASS " if cond else "  FAIL ") + msg)
+            ok = ok and cond
+
+        check(len(names) == expected_entries + 1, "entry count +1 (dylib)")
+        check(f"{app}/Frameworks/{DYLIB_NAME}" in names, "dylib entry present")
+        check(exe_entry in names, "executable entry present")
+
+        data = zf.read(exe_entry)
+        ncmds, _, lc_end, min_data = macho_metrics(data)
+        paths = existing_paths(data, ncmds)
+        check(DYLIB_INSTALL in paths, "LC_LOAD_DYLIB parses back")
+        check(lc_end <= min_data, "load commands fit before section data")
+
+        bad = zf.testzip()
+        check(bad is None, f"zip integrity ({bad})")
+
+        if not ok:
+            raise SystemExit("output verification failed")
 
 
 if __name__ == "__main__":

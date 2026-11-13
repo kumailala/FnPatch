@@ -42,7 +42,10 @@ static CFTypeRef hook_copy_ents(void *task, CFArrayRef keys, CFErrorRef *err)
     CFTypeRef real = g_real_copy_ents ? g_real_copy_ents(task, keys, err) : NULL;
     CFMutableDictionaryRef merged = fn_entitlements();
     if (!merged) {
-        return real;
+        if (real) {
+            CFRelease(real);
+        }
+        return NULL;
     }
     if (real && CFGetTypeID(real) == CFDictionaryGetTypeID()) {
         CFIndex n = CFDictionaryGetCount((CFDictionaryRef)real);
@@ -56,6 +59,8 @@ static CFTypeRef hook_copy_ents(void *task, CFArrayRef keys, CFErrorRef *err)
         }
         free(ks);
         free(vs);
+    }
+    if (real) {
         CFRelease(real);
     }
     FNLOG("entitlements: bulk request spoofed");

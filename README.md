@@ -37,7 +37,7 @@ There is no EAC framework in the bundle. The stack is:
 | `mod_codesign` | `SecStaticCodeCheckValidity`, `SecCodeCheckValidity`, `…WithErrors`, `MISValidateSignature`, `SecCodeCopySigningInformation`, `csops`, `csops_audittoken` | every signature verdict is success; signing info reports Epic's team. `csops` patching is off by default — it returns an OSStatus without filling the caller's status buffer, so it is opt-in via `patch_csops=1` |
 | `mod_entitlements` | `SecTaskCopyValueForEntitlement`, `SecTaskCopyValuesForEntitlements`, `SecTaskCopySigningIdentifier` | the kernel-side identity reads back as `JPKKQ2FLA9` / `com.epicgames.FortniteGame` |
 | `mod_fileint` | `open`, `openat`, `stat`, `lstat`, `access`, `fopen` | nothing can open or stat the dylib; every integrity-looking path is logged |
-| `mod_eos` | `EOS_AntiCheatClient_PollStatus`, `BeginSession`, `ReceiveMessageFromServer` | violations are forced to `EOS_ACCVT_NoViolation`, the session call returns `EOS_Success`, server messages are dropped |
+| `mod_eos` | `EOS_AntiCheatClient_PollStatus`, `BeginSession`, `ReceiveMessageFromServer` | violations are forced to `EOS_ACCVT_NoViolation` and the session call returns `EOS_Success`. Server messages pass through untouched unless `eos_drop_server=1`, because starving the handshake invites a different kick |
 | `mod_offsets` | config-driven | `ret0` / `ret1` / `retvoid` address lists for whatever the log points at |
 
 Genuine values, read out of `Fortnite_43.10.ipa/…/cyan.entitlements`:
@@ -113,6 +113,7 @@ patch_csops=0
 entitlements=1
 fileint=1
 eos=1
+eos_drop_server=0
 offsets=1
 ret0=0x123456
 ret1=0x123456

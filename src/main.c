@@ -51,6 +51,7 @@ static void write_default_config(void)
         "entitlements=1\n"
         "fileint=1\n"
         "eos=1\n"
+        "eos_drop_server=0\n"
         "offsets=1\n"
         "\n"
         "# Addresses relative to the main Mach-O header, comma separated.\n"

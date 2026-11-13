@@ -22,6 +22,7 @@ typedef int32_t (*recv_server_t)(void *, const void *);
 static poll_status_t g_real_poll;
 static session_t    g_real_begin;
 static recv_server_t g_real_recv;
+static bool          g_drop_server;
 
 static int32_t hook_poll_status(void *handle, int32_t *violation)
 {
@@ -47,9 +48,10 @@ static int32_t hook_begin_session(const void *options)
 
 static int32_t hook_recv_server(void *handle, const void *message)
 {
-    (void)handle;
-    (void)message;
-    return 0;
+    if (g_drop_server) {
+        return 0;
+    }
+    return g_real_recv ? g_real_recv(handle, message) : 0;
 }
 
 static bool install_eos(void)
@@ -72,7 +74,8 @@ static bool install_eos(void)
     }
     void *recv = fn_sym("EOS_AntiCheatClient_ReceiveMessageFromServer");
     if (recv && fn_hook_inline(recv, (void *)hook_recv_server, (void **)&g_real_recv)) {
-        FNLOG("eos: ReceiveMessageFromServer hooked");
+        g_drop_server = fn_cfg_flag("eos_drop_server", 0) != 0;
+        FNLOG("eos: ReceiveMessageFromServer hooked (drop=%d)", g_drop_server ? 1 : 0);
     }
     (void)tramp;
     return true;
