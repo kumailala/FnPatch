@@ -2,6 +2,7 @@
 #include "log.h"
 #include "config.h"
 #include "hook.h"
+#include "crash.h"
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <stdio.h>
@@ -73,6 +74,7 @@ static void write_default_config(void)
         "eos_drop_server=0\n"
         "offsets=1\n"
         "popup=1\n"
+        "crash=1\n"
         "\n"
         "# Addresses relative to the main Mach-O header, comma separated.\n"
         "# ret0 / ret1 -> mov w0,#N ; ret        retvoid -> ret\n"
@@ -86,6 +88,7 @@ __attribute__((constructor))
 static void fnpatch_init(void)
 {
     fn_log_init();
+    fn_crash_install();
     log_environment();
 
     FNLOG("FnPatch %s boot, main header %p slide 0x%llx",
@@ -94,14 +97,30 @@ static void fnpatch_init(void)
 
     write_default_config();
 
+    fn_step("scrub_header");
     mod_header_scrub_install();
+
+    fn_step("hide_images");
     mod_hide_install();
+
+    fn_step("codesign");
     mod_codesign_install();
+
+    fn_step("entitlements");
     mod_entitlements_install();
+
+    fn_step("fileint");
     mod_fileint_install();
+
+    fn_step("eos");
     mod_eos_install();
+
+    fn_step("offsets");
     mod_offsets_install();
+
+    fn_step("popup");
     mod_popup_install();
 
+    fn_step("done");
     FNLOG("FnPatch init complete, log at Documents/FnDiag/FnPatch.log");
 }

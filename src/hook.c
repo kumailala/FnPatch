@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <unistd.h>
 #include <libkern/OSCacheControl.h>
 
 #define A64_LDR_X16_8   0x58000050u
@@ -24,13 +25,19 @@ static bool is_cbz(uint32_t i)       { return (i & 0x7E000000u) == 0x34000000u; 
 static bool is_tbz(uint32_t i)       { return (i & 0x7E000000u) == 0x36000000u; }
 static bool is_ldr_lit(uint32_t i)   { return (i & 0x3B000000u) == 0x18000000u; }
 
+static size_t page_size_cached(void)
+{
+    static size_t cached;
+    if (!cached) {
+        int ps = getpagesize();
+        cached = ps > 0 ? (size_t)ps : 16384;
+    }
+    return cached;
+}
+
 bool fn_vm_writable(void *addr, size_t len)
 {
-    vm_size_t ps = 0;
-    host_page_size(mach_host_self(), &ps);
-    if (!ps) {
-        ps = 16384;
-    }
+    size_t ps = page_size_cached();
     uintptr_t page = (uintptr_t)addr & ~(uintptr_t)(ps - 1);
     size_t    off  = (uintptr_t)addr - page;
     size_t    size = ((off + len + ps - 1) / ps) * ps;
@@ -47,15 +54,15 @@ bool fn_vm_writable(void *addr, size_t len)
 /* Restore execute-only protection after patching, so the page does not stay writable. */
 void fn_make_executable(void *addr, size_t len)
 {
-    vm_size_t ps = 0;
-    host_page_size(mach_host_self(), &ps);
-    if (!ps) {
-        ps = 16384;
-    }
+    size_t ps = page_size_cached();
     uintptr_t page = (uintptr_t)addr & ~(uintptr_t)(ps - 1);
     size_t    off  = (uintptr_t)addr - page;
     size_t    size = ((off + len + ps - 1) / ps) * ps;
-    vm_protect(mach_task_self(), page, size, false, VM_PROT_READ | VM_PROT_EXECUTE);
+    kern_return_t kr = vm_protect(mach_task_self(), page, size, false,
+                                  VM_PROT_READ | VM_PROT_EXECUTE);
+    if (kr != KERN_SUCCESS) {
+        FNLOG("make_executable failed at %p (0x%x)", addr, kr);
+    }
 }
 
 static void emit_branch(uint32_t *p, uintptr_t dest)
@@ -195,8 +202,8 @@ static uint32_t relocate(uint32_t i, uintptr_t from, uintptr_t to, bool *ok)
 #define FN_TRAMP_CAVE_BYTES (64 * 1024)
 
 __attribute__((used, aligned(16), section("__TEXT,__text")))
-static const uint8_t g_tramp_cave[FN_TRAMP_CAVE_BYTES];
-static size_t        g_tramp_used;
+static uint8_t g_tramp_cave[FN_TRAMP_CAVE_BYTES];
+static size_t  g_tramp_used;
 
 static void *cave_alloc(size_t size)
 {
@@ -243,6 +250,15 @@ fn_hook *fn_hook_inline(void *target, void *handler, void **trampoline_out)
     }
 
     uint32_t *src = (uint32_t *)target;
+
+    /* A 16-byte write that crosses the end of a mapped page faults, and a fault
+     * inside this dylib is a dead process. */
+    size_t ps = page_size_cached();
+    if (((uintptr_t)target & (ps - 1)) > ps - 16) {
+        FNLOG("hook_inline: %p straddles a page boundary, refused", target);
+        return NULL;
+    }
+
     for (int i = 0; i < 4; i++) {
         /* A return before the last displaced slot means the function is shorter
          * than 16 bytes; patching would overwrite the neighbouring function. */
@@ -257,19 +273,42 @@ fn_hook *fn_hook_inline(void *target, void *handler, void **trampoline_out)
         }
     }
 
-    void *tramp = alloc_near((uintptr_t)target);
-    const bool anon = tramp != NULL;
-    if (!tramp) {
-        tramp = cave_alloc(FN_TRAMP_BYTES);
-        if (!tramp) {
-            FNLOG("hook_inline: trampoline pool exhausted for %p", target);
-            return NULL;
-        }
+    FNLOG("hook_inline: installing at %p", target);
+
+    /*
+     * Trampoline placement, in the order iOS actually tolerates:
+     *
+     * 1. the pool inside this dylib's own __TEXT. The installer signed this
+     *    image, so making one of its pages writable is the same operation the
+     *    patch itself performs on the target, which the process is already
+     *    allowed to do.
+     * 2. anonymous memory, only when asked for. A fresh anon page made
+     *    executable is unsigned executable memory; on a non-debuggable process
+     *    the kernel kills it, and the kill lands inside mprotect, so nothing
+     *    gets logged.
+     *
+     * The pool used to be the fallback, which is exactly backwards: the first
+     * hook in the process went straight to the path that gets killed.
+     */
+    void *tramp = cave_alloc(FN_TRAMP_BYTES);
+    bool anon = false;
+
+    if (tramp) {
         if (!fn_vm_writable(tramp, FN_TRAMP_BYTES)) {
             FNLOG("hook_inline: trampoline pool not writable at %p", tramp);
             return NULL;
         }
-        FNLOG("hook_inline: %p uses the in-image trampoline pool", target);
+    } else if (fn_cfg_flag("anon_tramp", 0)) {
+        tramp = alloc_near((uintptr_t)target);
+        if (!tramp) {
+            FNLOG("hook_inline: no trampoline available for %p", target);
+            return NULL;
+        }
+        anon = true;
+        FNLOG("hook_inline: %p uses anon trampoline at %p", target, tramp);
+    } else {
+        FNLOG("hook_inline: trampoline pool exhausted at %p", target);
+        return NULL;
     }
 
     uint32_t *t = (uint32_t *)tramp;

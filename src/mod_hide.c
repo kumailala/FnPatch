@@ -134,14 +134,17 @@ void mod_hide_install(void)
     /* Header and name first: if the count hook is the one that fails, the list
      * still answers correctly for every index below the real count. */
     void *tramp = NULL;
+    FNLOG("hide: hooking _dyld_get_image_header");
     if (!fn_hook_inline((void *)g_real_header, (void *)hook_header, &tramp)) {
         FNLOG("hide: header hook failed, list left untouched");
         return;
     }
+    FNLOG("hide: hooking _dyld_get_image_name");
     if (!fn_hook_inline((void *)g_real_name, (void *)hook_name, &tramp)) {
         FNLOG("hide: name hook failed, count left untouched");
         return;
     }
+    FNLOG("hide: hooking _dyld_image_count");
     if (!fn_hook_inline((void *)g_real_count, (void *)hook_count, &tramp)) {
         FNLOG("hide: count hook failed, %d image(s) hidden", hidden);
         return;

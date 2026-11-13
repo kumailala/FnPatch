@@ -120,10 +120,20 @@ eos=1
 eos_drop_server=0
 offsets=1
 popup=1
+crash=1
+anon_tramp=0
 ret0=0x123456
 ret1=0x123456
 retvoid=0x123456
 ```
+
+- `crash` arms a fatal-signal reporter: on SIGSEGV/SIGBUS/SIGILL it appends
+  `crash: <signal> pc=0x… lr=0x… addr=0x… step=<what was running>` to the log
+  before re-raising, so a dead process still leaves its last line of evidence.
+- `anon_tramp` allows the inline hooker to fall back to an anonymous
+  trampoline page when the in-image pool is exhausted. It is off by default:
+  unsigned executable memory is killed by the kernel inside `mprotect`, which
+  is exactly how a silent boot-time death happens.
 
 - `scrub_header` removes the injected `LC_LOAD_DYLIB` from the in-memory Mach-O
   header, so a load-command walk sees the stock layout. The file on disk is
