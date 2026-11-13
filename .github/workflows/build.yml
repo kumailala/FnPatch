@@ -2,11 +2,23 @@ name: build
 
 on:
   push:
+    paths-ignore:
+      - "**/*.md"
   workflow_dispatch:
 
+# A new push supersedes the one before it: no point building a revision nobody
+# will install, and the macOS slot is the scarce resource here.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Everything that needs Apple's toolchain lives in one job. Two macOS jobs
+  # meant two trips through the runner queue, and the queue is the slow part,
+  # not the compile: this job is a few seconds of clang plus the harness.
   dylib:
     runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -15,12 +27,18 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
+      - name: Host harness
+        run: |
+          clang -Isrc -O1 -Wall -Wextra -Wno-unused-parameter \
+            -o hook_test tests/hook_test.c src/log.c
+          ./hook_test
+
       - name: Build FnPatch.dylib
         run: |
           chmod +x build.sh
           ./build.sh FnPatch.dylib
 
-      - name: Strict rebuild (warnings are errors)
+      - name: Strict syntax pass (warnings are errors)
         run: |
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
           xcrun -sdk iphoneos clang -arch arm64 -fsyntax-only \
@@ -36,20 +54,10 @@ jobs:
           name: FnPatch-dylib
           path: FnPatch.dylib
           if-no-files-found: error
+          retention-days: 7
 
-  test:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build host harness
-        run: |
-          clang -Isrc -O1 -Wall -Wextra -Wno-unused-parameter \
-            -o hook_test tests/hook_test.c src/log.c
-
-      - name: Run relocator and patcher checks
-        run: ./hook_test
-
+  # Python only, so it starts immediately and finishes long before the macOS
+  # queue opens. Kept separate because it does not need an Apple runner.
   injector:
     runs-on: ubuntu-latest
     steps:
