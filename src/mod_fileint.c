@@ -57,7 +57,7 @@ static bool is_hidden(const char *path)
     return false;
 }
 
-static void watch(const char *func, const char *path)
+static void watch(const char *func, const char *path, void *caller)
 {
     if (!path || g_hits >= FN_MAX_LOG_HITS) {
         return;
@@ -65,7 +65,10 @@ static void watch(const char *func, const char *path)
     for (size_t i = 0; i < sizeof(g_watch) / sizeof(g_watch[0]); i++) {
         if (strstr(path, g_watch[i])) {
             g_hits++;
-            FNLOG("fs: %s(%s)", func, path);
+            uintptr_t pc   = (uintptr_t)caller;
+            uintptr_t base = (uintptr_t)fn_main_header();
+            FNLOG("fs: %s(%s) caller=+0x%llx", func, path,
+                  (unsigned long long)(pc - base));
             return;
         }
     }
@@ -91,7 +94,7 @@ static int hook_open(const char *path, int flags, mode_t mode)
         errno = ENOENT;
         return -1;
     }
-    watch("open", path);
+    watch("open", path, __builtin_return_address(0));
     return g_real_open ? g_real_open(path, flags, mode) : -1;
 }
 
@@ -102,7 +105,7 @@ static int hook_openat(int dirfd, const char *path, int flags, mode_t mode)
         errno = ENOENT;
         return -1;
     }
-    watch("openat", path);
+    watch("openat", path, __builtin_return_address(0));
     return g_real_openat ? g_real_openat(dirfd, path, flags, mode) : -1;
 }
 
@@ -112,7 +115,7 @@ static int hook_stat(const char *path, struct stat *buf)
         errno = ENOENT;
         return -1;
     }
-    watch("stat", path);
+    watch("stat", path, __builtin_return_address(0));
     return g_real_stat ? g_real_stat(path, buf) : -1;
 }
 
@@ -122,7 +125,7 @@ static int hook_lstat(const char *path, struct stat *buf)
         errno = ENOENT;
         return -1;
     }
-    watch("lstat", path);
+    watch("lstat", path, __builtin_return_address(0));
     return g_real_lstat ? g_real_lstat(path, buf) : -1;
 }
 
@@ -132,7 +135,7 @@ static int hook_access(const char *path, int mode)
         errno = ENOENT;
         return -1;
     }
-    watch("access", path);
+    watch("access", path, __builtin_return_address(0));
     return g_real_access ? g_real_access(path, mode) : -1;
 }
 
@@ -142,7 +145,7 @@ static FILE *hook_fopen(const char *path, const char *mode)
         errno = ENOENT;
         return NULL;
     }
-    watch("fopen", path);
+    watch("fopen", path, __builtin_return_address(0));
     return g_real_fopen ? g_real_fopen(path, mode) : NULL;
 }
 

@@ -30,14 +30,19 @@ static copyinfo_t g_real_copy_info;
 
 static OSStatus hook_check3(const void *code, SecCSFlags flags, const void *req)
 {
-    FNLOG("codesign: check(%p, %u, %p) -> 0", code, (unsigned)flags, req);
+    FNLOG("codesign: check(%p, %u, %p) -> 0 caller=+0x%llx", code, (unsigned)flags, req,
+          (unsigned long long)((uintptr_t)__builtin_return_address(0) -
+                               (uintptr_t)fn_main_header()));
     return 0;
 }
 
 static OSStatus hook_check4(const void *code, SecCSFlags flags, const void *req,
                             CFErrorRef *err)
 {
-    FNLOG("codesign: check_err(%p, %u, %p, %p) -> 0", code, (unsigned)flags, req, err);
+    FNLOG("codesign: check_err(%p, %u, %p, %p) -> 0 caller=+0x%llx", code,
+          (unsigned)flags, req, err,
+          (unsigned long long)((uintptr_t)__builtin_return_address(0) -
+                               (uintptr_t)fn_main_header()));
     if (err) {
         *err = NULL;
     }
