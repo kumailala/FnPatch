@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 static bool is_target_app(void)
 {
@@ -22,7 +23,17 @@ static bool is_target_app(void)
     if (!CFStringGetCString(ident, buf, sizeof(buf), kCFStringEncodingUTF8)) {
         return false;
     }
-    return strcmp(buf, FN_BUNDLE_ID) == 0;
+    FNLOG("bundle identifier: %s", buf);
+    if (strcmp(buf, FN_BUNDLE_ID) == 0) {
+        return true;
+    }
+    /*
+     * Sideloadly, AltStore and friends rewrite the identifier to fit the
+     * signing profile (com.<team>.FortniteGame, com.example.abc123.FortniteGame
+     * and similar), so the exact match above is not the common case on a
+     * sideload. Anything still calling itself Fortnite is the app we shipped in.
+     */
+    return strcasestr(buf, "fortnite") != NULL;
 }
 
 static void write_default_config(void)
@@ -66,11 +77,13 @@ static void write_default_config(void)
 __attribute__((constructor))
 static void fnpatch_init(void)
 {
+    fn_log_init();
+
     if (!is_target_app()) {
+        FNLOG("not the target app, FnPatch inactive");
         return;
     }
 
-    fn_log_init();
     FNLOG("FnPatch %s boot, main header %p slide 0x%llx",
           FN_PATCH_VERSION, fn_main_header(),
           (unsigned long long)fn_main_slide());
