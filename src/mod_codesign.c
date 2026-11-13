@@ -5,8 +5,18 @@
 #include "ent.h"
 
 #include <CoreFoundation/CoreFoundation.h>
-#include <Security/Security.h>
 #include <dlfcn.h>
+
+/*
+ * Security/SecCode.h is macOS-only, but the symbols behind these strings are
+ * present in the iOS framework, so the constants are declared locally.
+ */
+typedef uint32_t SecCSFlags;
+
+#define FN_SEC_INFO_IDENTIFIER   CFSTR("identifier")
+#define FN_SEC_INFO_TEAM         CFSTR("teamid")
+#define FN_SEC_INFO_FLAGS        CFSTR("flags")
+#define FN_SEC_INFO_ENTITLEMENTS CFSTR("entitlements-dict")
 
 /*
  * Every signature verdict the client can consume is reduced to success here.
@@ -56,11 +66,11 @@ static OSStatus hook_copy_info(const void *code, SecCSFlags flags, CFDictionaryR
             int32_t zero = 0;
             CFNumberRef flags_num = CFNumberCreate(NULL, kCFNumberSInt32Type, &zero);
 
-            CFDictionarySetValue(m, kSecCodeInfoIdentifier, ident);
-            CFDictionarySetValue(m, kSecCodeInfoTeamIdentifier, team);
-            CFDictionarySetValue(m, kSecCodeInfoFlags, flags_num);
+            CFDictionarySetValue(m, FN_SEC_INFO_IDENTIFIER, ident);
+            CFDictionarySetValue(m, FN_SEC_INFO_TEAM, team);
+            CFDictionarySetValue(m, FN_SEC_INFO_FLAGS, flags_num);
             if (ent) {
-                CFDictionarySetValue(m, kSecCodeInfoEntitlementsDict, ent);
+                CFDictionarySetValue(m, FN_SEC_INFO_ENTITLEMENTS, ent);
                 CFRelease(ent);
             }
             CFRelease(ident);

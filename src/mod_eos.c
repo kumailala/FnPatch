@@ -26,6 +26,7 @@ static recv_server_t g_real_recv;
 static int32_t hook_poll_status(void *handle, int32_t *violation)
 {
     int32_t rc = g_real_poll ? g_real_poll(handle, violation) : 0;
+    (void)rc;
     if (violation) {
         if (*violation != 0) {
             FNLOG("eos: violation %d suppressed", (int)*violation);
