@@ -184,6 +184,30 @@ static uint32_t relocate(uint32_t i, uintptr_t from, uintptr_t to, bool *ok)
 }
 
 #define FN_HOOK_TRAMP_PAGES 2
+#define FN_TRAMP_BYTES     32
+
+/*
+ * Fallback trampoline pool inside this dylib's own __TEXT. Some environments
+ * deny new executable mappings (no JIT entitlement) but still allow a signed
+ * code page to be copied-on-write, which is exactly what the inline patch
+ * itself needs. The pool exists so a hook keeps working in that case.
+ */
+#define FN_TRAMP_CAVE_BYTES (64 * 1024)
+
+__attribute__((used, aligned(16), section("__TEXT,__text")))
+static const uint8_t g_tramp_cave[FN_TRAMP_CAVE_BYTES];
+static size_t        g_tramp_used;
+
+static void *cave_alloc(size_t size)
+{
+    size = (size + 15) & ~(size_t)15;
+    if (g_tramp_used + size > FN_TRAMP_CAVE_BYTES) {
+        return NULL;
+    }
+    void *p = (void *)(uintptr_t)&g_tramp_cave[g_tramp_used];
+    g_tramp_used += size;
+    return p;
+}
 
 static void *alloc_near(uintptr_t target)
 {
@@ -234,8 +258,18 @@ fn_hook *fn_hook_inline(void *target, void *handler, void **trampoline_out)
     }
 
     void *tramp = alloc_near((uintptr_t)target);
+    const bool anon = tramp != NULL;
     if (!tramp) {
-        return NULL;
+        tramp = cave_alloc(FN_TRAMP_BYTES);
+        if (!tramp) {
+            FNLOG("hook_inline: trampoline pool exhausted for %p", target);
+            return NULL;
+        }
+        if (!fn_vm_writable(tramp, FN_TRAMP_BYTES)) {
+            FNLOG("hook_inline: trampoline pool not writable at %p", tramp);
+            return NULL;
+        }
+        FNLOG("hook_inline: %p uses the in-image trampoline pool", target);
     }
 
     uint32_t *t = (uint32_t *)tramp;
@@ -244,23 +278,31 @@ fn_hook *fn_hook_inline(void *target, void *handler, void **trampoline_out)
         t[i] = relocate(src[i], (uintptr_t)&src[i], (uintptr_t)&t[i], &ok);
         if (!ok) {
             FNLOG("hook_inline: relocation of %p+%d failed", target, i * 4);
-            munmap(tramp, FN_HOOK_TRAMP_PAGES * 16384);
+            if (anon) {
+                munmap(tramp, FN_HOOK_TRAMP_PAGES * 16384);
+            }
             return NULL;
         }
     }
     emit_branch(&t[4], (uintptr_t)target + 16);
 
-    if (mprotect(tramp, FN_HOOK_TRAMP_PAGES * 16384,
-                 PROT_READ | PROT_EXEC) != 0) {
-        FNLOG("hook_inline: mprotect trampoline failed");
-        munmap(tramp, FN_HOOK_TRAMP_PAGES * 16384);
-        return NULL;
+    if (anon) {
+        if (mprotect(tramp, FN_HOOK_TRAMP_PAGES * 16384,
+                     PROT_READ | PROT_EXEC) != 0) {
+            FNLOG("hook_inline: mprotect trampoline failed");
+            munmap(tramp, FN_HOOK_TRAMP_PAGES * 16384);
+            return NULL;
+        }
+    } else {
+        fn_vm_executable(tramp, FN_TRAMP_BYTES);
     }
     sys_icache_invalidate(tramp, 64);
 
     fn_hook *h = calloc(1, sizeof(*h));
     if (!h) {
-        munmap(tramp, FN_HOOK_TRAMP_PAGES * 16384);
+        if (anon) {
+            munmap(tramp, FN_HOOK_TRAMP_PAGES * 16384);
+        }
         return NULL;
     }
     h->target     = target;

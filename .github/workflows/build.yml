@@ -23,7 +23,7 @@ jobs:
       - name: Strict rebuild (warnings are errors)
         run: |
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-          xcrun -sdk iphoneos clang -arch arm64 -dynamiclib -fsyntax-only \
+          xcrun -sdk iphoneos clang -arch arm64 -fsyntax-only \
             -O2 -fobjc-arc -Isrc -isysroot "$SDK" \
             -miphoneos-version-min=15.0 \
             -Wall -Wextra -Werror \
