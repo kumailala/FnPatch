@@ -33,7 +33,7 @@ There is no EAC framework in the bundle. The stack is:
 
 | module | target | effect |
 |---|---|---|
-| `mod_hide` | `_dyld_image_count` / `_dyld_get_image_name` / `_dyld_get_image_header` | image list is served from a filtered snapshot with indices remapped; FnPatch, Substrate, frida and friends are not there |
+| `mod_hide` | `_dyld_image_count` / `_dyld_get_image_name` / `_dyld_get_image_header` | the list is filtered live and indices are remapped, so an index from `count()` is always valid for `name()`/`header()`; FnPatch, Substrate, frida and friends are not there |
 | `mod_codesign` | `SecStaticCodeCheckValidity`, `SecCodeCheckValidity`, `…WithErrors`, `MISValidateSignature`, `SecCodeCopySigningInformation`, `csops`, `csops_audittoken` | every signature verdict is success; signing info reports Epic's team. `csops` patching is off by default — it returns an OSStatus without filling the caller's status buffer, so it is opt-in via `patch_csops=1` |
 | `mod_entitlements` | `SecTaskCopyValueForEntitlement`, `SecTaskCopyValuesForEntitlements`, `SecTaskCopySigningIdentifier` | the kernel-side identity reads back as `JPKKQ2FLA9` / `com.epicgames.FortniteGame` |
 | `mod_fileint` | `open`, `openat`, `stat`, `lstat`, `access`, `fopen` | nothing can open or stat the dylib; every integrity-looking path is logged |
@@ -125,8 +125,10 @@ retvoid=0x123456
 - The inline hook displaces four instructions. A prologue whose first 16 bytes
   contain a direct `B`/`BL` is refused and logged rather than miscompiled —
   that is the only case where a module silently does less than advertised.
-- `mod_hide` snapshots the image list once at load. A dylib injected after us
-  is not in the snapshot.
+- `mod_hide` resolves the three dyld functions through `dlsym`, not through this
+  dylib's own import stubs, so the hooks land on the function the client calls.
+  The list is filtered on every call, so images loaded after boot are still
+  counted and indexed correctly.
 - iOS 15+ shipped binaries may use chained fixups; this design sidesteps that
   entirely by patching code, not the symbol pointers.
 - The EOS anti-cheat client only exists once `EOSSDK` is loaded, so that module
