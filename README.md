@@ -39,6 +39,7 @@ There is no EAC framework in the bundle. The stack is:
 | `mod_fileint` | `open`, `openat`, `stat`, `lstat`, `access`, `fopen` | nothing can open or stat the dylib; every integrity-looking path is logged |
 | `mod_eos` | `EOS_AntiCheatClient_PollStatus`, `BeginSession`, `ReceiveMessageFromServer` | violations are forced to `EOS_ACCVT_NoViolation` and the session call returns `EOS_Success`. Server messages pass through untouched unless `eos_drop_server=1`, because starving the handshake invites a different kick |
 | `mod_offsets` | config-driven | `ret0` / `ret1` / `retvoid` address lists for whatever the log points at |
+| `mod_popup` | config-driven (`popup=1`) | one-shot "dylib loaded OK" alert at launch, retried on the main queue until the game has a view controller to present on |
 
 Genuine values, read out of `Fortnite_43.10.ipa/…/cyan.entitlements`:
 
@@ -115,6 +116,7 @@ fileint=1
 eos=1
 eos_drop_server=0
 offsets=1
+popup=1
 ret0=0x123456
 ret1=0x123456
 retvoid=0x123456

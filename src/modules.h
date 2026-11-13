@@ -7,5 +7,6 @@ void mod_entitlements_install(void);
 void mod_fileint_install(void);
 void mod_eos_install(void);
 void mod_offsets_install(void);
+void mod_popup_install(void);
 
 #endif

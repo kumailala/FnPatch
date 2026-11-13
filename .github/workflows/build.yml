@@ -28,7 +28,7 @@ jobs:
             -miphoneos-version-min=15.0 \
             -Wall -Wextra -Werror \
             -Wno-unused-parameter -Wno-unused-function \
-            src/*.c
+            src/*.c src/*.m
 
       - name: Upload
         uses: actions/upload-artifact@v4

@@ -56,6 +56,8 @@ static void install_fault_handlers(void)
     sa.sa_flags = SA_NODEFER;
     sigaction(SIGBUS, &sa, NULL);
     sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGILL, &sa, NULL);
+    sigaction(SIGTRAP, &sa, NULL);
 }
 
 /* Returns 0 when the call completed, 1 when the platform refused it. */

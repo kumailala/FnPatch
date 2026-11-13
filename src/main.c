@@ -53,6 +53,7 @@ static void write_default_config(void)
         "eos=1\n"
         "eos_drop_server=0\n"
         "offsets=1\n"
+        "popup=1\n"
         "\n"
         "# Addresses relative to the main Mach-O header, comma separated.\n"
         "# ret0 / ret1 -> mov w0,#N ; ret        retvoid -> ret\n"
@@ -82,6 +83,7 @@ static void fnpatch_init(void)
     mod_fileint_install();
     mod_eos_install();
     mod_offsets_install();
+    mod_popup_install();
 
     FNLOG("FnPatch init complete, log at $HOME/Documents/FnPatch.log");
 }
