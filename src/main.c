@@ -9,31 +9,42 @@
 #include <string.h>
 #include <strings.h>
 
-static bool is_target_app(void)
+/*
+ * The bundle identifier is not usable as a gate. Sideloadly rewrites it to a
+ * random pair of words (app.passionfruit5910.lavender4318), so Epic's
+ * identifier appears on exactly zero sideloaded builds and a match there is
+ * never true in the only situation this dylib is used in.
+ *
+ * The dylib is inserted into one app by hand, so it runs unconditionally and
+ * logs what it found, which is also the first line of evidence when something
+ * downstream misbehaves.
+ */
+static void log_environment(void)
 {
     CFBundleRef bundle = CFBundleGetMainBundle();
-    if (!bundle) {
-        return false;
+    char ident[256] = "(none)";
+
+    if (bundle) {
+        CFStringRef s = CFBundleGetIdentifier(bundle);
+        if (s && !CFStringGetCString(s, ident, sizeof(ident), kCFStringEncodingUTF8)) {
+            strlcpy(ident, "(unprintable)", sizeof(ident));
+        }
     }
-    CFStringRef ident = CFBundleGetIdentifier(bundle);
-    if (!ident) {
-        return false;
+
+    CFStringRef exe_cf = bundle ? CFBundleGetValueForInfoDictionaryKey(bundle,
+                                                                     kCFBundleExecutableKey)
+                                : NULL;
+
+    FNLOG("bundle identifier: %s", ident);
+    FNLOG("matches Epic identifier: %s",
+          strcasestr(ident, "fortnite") ? "yes" : "no (re-signed by the installer)");
+    if (exe_cf && CFGetTypeID(exe_cf) == CFStringGetTypeID()) {
+        char name[256] = "(none)";
+        if (CFStringGetCString((CFStringRef)exe_cf, name, sizeof(name),
+                               kCFStringEncodingUTF8)) {
+            FNLOG("main executable: %s", name);
+        }
     }
-    char buf[256];
-    if (!CFStringGetCString(ident, buf, sizeof(buf), kCFStringEncodingUTF8)) {
-        return false;
-    }
-    FNLOG("bundle identifier: %s", buf);
-    if (strcmp(buf, FN_BUNDLE_ID) == 0) {
-        return true;
-    }
-    /*
-     * Sideloadly, AltStore and friends rewrite the identifier to fit the
-     * signing profile (com.<team>.FortniteGame, com.example.abc123.FortniteGame
-     * and similar), so the exact match above is not the common case on a
-     * sideload. Anything still calling itself Fortnite is the app we shipped in.
-     */
-    return strcasestr(buf, "fortnite") != NULL;
 }
 
 static void write_default_config(void)
@@ -75,11 +86,7 @@ __attribute__((constructor))
 static void fnpatch_init(void)
 {
     fn_log_init();
-
-    if (!is_target_app()) {
-        FNLOG("not the target app, FnPatch inactive");
-        return;
-    }
+    log_environment();
 
     FNLOG("FnPatch %s boot, main header %p slide 0x%llx",
           FN_PATCH_VERSION, fn_main_header(),
