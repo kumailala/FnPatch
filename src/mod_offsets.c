@@ -37,10 +37,13 @@ static void apply_list(const char *key, int mode)
 
     for (char *tok = strtok_r(buf, ",; ", &save); tok;
          tok = strtok_r(NULL, ",; ", &save)) {
-        while (*tok == ' ') {
-            tok++;
+        char *end = NULL;
+        unsigned long long parsed = strtoull(tok, &end, 0);
+        if (end == tok || parsed == 0) {
+            FNLOG("offsets: %s entry '%s' is not an offset, skipped", key, tok);
+            continue;
         }
-        uintptr_t off = (uintptr_t)strtoull(tok, NULL, 0);
+        uintptr_t off = (uintptr_t)parsed;
         void *addr = (void *)(base + off);
 
         bool ok = false;
@@ -49,8 +52,8 @@ static void apply_list(const char *key, int mode)
             case 1: ok = fn_patch_ret_w0(addr, 1); break;
             default: ok = fn_patch_ret_void(addr); break;
         }
-        FNLOG("offsets: %s %s@%s (base+0x%llx) -> %s", key, tok,
-              (const char *)addr, (unsigned long long)off, ok ? "patched" : "failed");
+        FNLOG("offsets: %s '%s' -> %p (header+0x%llx) %s", key, tok, addr,
+              (unsigned long long)off, ok ? "patched" : "failed");
         applied += ok ? 1 : 0;
     }
     FNLOG("offsets: %s applied %d", key, applied);

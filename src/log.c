@@ -21,7 +21,7 @@ static char            g_log_path[512];
  */
 static __thread int g_in_log;
 
-static struct { char key[128]; char val[128]; } g_cfg[FN_CFG_MAX_LINES];
+static struct { char key[64]; char val[384]; } g_cfg[FN_CFG_MAX_LINES];
 static int  g_cfg_count = -1;
 
 static const char *home_dir(void)
