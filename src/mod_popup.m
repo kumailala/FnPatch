@@ -56,7 +56,7 @@ static void fn_popup_show(void)
     g_alert_window.hidden = NO;
 
     NSString *message =
-        [NSString stringWithFormat:@"dylib loaded OK\nFnPatch %s\nlog: Documents/FnPatch.log",
+        [NSString stringWithFormat:@"dylib loaded OK\nFnPatch %s\nlog: Documents/FnDiag/FnPatch.log",
                                    FN_PATCH_VERSION];
     UIAlertController *alert =
         [UIAlertController alertControllerWithTitle:@"FnPatch"

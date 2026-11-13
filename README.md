@@ -84,7 +84,8 @@ with a different identity.
 
 ## Read the result
 
-The dylib writes `Documents/FnPatch.log` inside the app container:
+The dylib writes `Documents/FnDiag/FnPatch.log` inside the app container, which
+is the folder the Files app shows for this bundle:
 
 ```
 FnPatch 1.0.0 boot, main header 0x102a40000 slide 0x0
@@ -101,11 +102,11 @@ client was inspecting, and the caller is the function to neutralise:
 ret1=0x<offset>
 ```
 
-in `Documents/FnPatch.config` (offsets are relative to the Mach-O header).
+in `Documents/FnDiag/FnPatch.config` (offsets are relative to the Mach-O header).
 
 ## Config
 
-`Documents/FnPatch.config`, written on first launch:
+`Documents/FnDiag/FnPatch.config`, written on first launch:
 
 ```
 hide_images=1

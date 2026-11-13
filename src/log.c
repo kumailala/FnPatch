@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/stat.h>
 #include <time.h>
 
 #define FN_CFG_MAX_LINES 256
@@ -14,6 +15,7 @@
 
 static pthread_mutex_t g_log_lock = PTHREAD_MUTEX_INITIALIZER;
 static char            g_log_path[512];
+static char            g_cfg_path[512];
 
 /*
  * fopen is hooked by mod_fileint, which logs through here. Without this the
@@ -30,6 +32,36 @@ static const char *home_dir(void)
     return h ? h : "/tmp";
 }
 
+/*
+ * Everything visible to a human lives in Documents/FnDiag: the app's Documents
+ * folder shows up in the Files app for this bundle, so the log and the config
+ * are one tap away instead of needing a cable.
+ */
+static void init_paths(void)
+{
+    char dir[480];
+    snprintf(dir, sizeof(dir), "%s/Documents/FnDiag", home_dir());
+    mkdir(dir, 0755);
+    snprintf(g_log_path, sizeof(g_log_path), "%s/FnPatch.log", dir);
+    snprintf(g_cfg_path, sizeof(g_cfg_path), "%s/FnPatch.config", dir);
+}
+
+const char *fn_log_path(void)
+{
+    if (!g_log_path[0]) {
+        init_paths();
+    }
+    return g_log_path;
+}
+
+const char *fn_cfg_path(void)
+{
+    if (!g_cfg_path[0]) {
+        init_paths();
+    }
+    return g_cfg_path;
+}
+
 static void cfg_load(void)
 {
     if (g_cfg_count >= 0) {
@@ -38,9 +70,14 @@ static void cfg_load(void)
     g_cfg_count = 0;
 
     char path[512];
-    snprintf(path, sizeof(path), "%s/Documents/FnPatch.config", home_dir());
+    snprintf(path, sizeof(path), "%s", fn_cfg_path());
 
     FILE *f = fopen(path, "r");
+    if (!f) {
+        /* Older builds wrote the config one level up. */
+        snprintf(path, sizeof(path), "%s/Documents/FnPatch.config", home_dir());
+        f = fopen(path, "r");
+    }
     if (!f) {
         return;
     }
@@ -105,7 +142,8 @@ int fn_cfg_flag(const char *key, int fallback)
 
 void fn_log_init(void)
 {
-    snprintf(g_log_path, sizeof(g_log_path), "%s/Documents/FnPatch.log", home_dir());
+    /* fn_log_path() creates Documents/FnDiag and fills g_log_path. */
+    (void)fn_log_path();
 
     /* Keep the previous run, truncate this one. */
     char prev[520];

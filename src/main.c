@@ -38,12 +38,7 @@ static bool is_target_app(void)
 
 static void write_default_config(void)
 {
-    const char *home = getenv("HOME");
-    if (!home) {
-        return;
-    }
-    char path[512];
-    snprintf(path, sizeof(path), "%s/Documents/FnPatch.config", home);
+    const char *path = fn_cfg_path();
     FILE *probe = fopen(path, "r");
     if (probe) {
         fclose(probe);
