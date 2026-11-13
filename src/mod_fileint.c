@@ -4,6 +4,7 @@
 #include "config.h"
 
 #include <errno.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
@@ -27,6 +28,27 @@ static const char *const g_hide_paths[] = {
     "ellekit",
 };
 
+/*
+ * Names that are filtered out of directory listings but still open normally.
+ * The diag folder has to stay writable for us, it just should not be visible
+ * to anything enumerating Documents.
+ */
+static const char *const g_hide_from_listing[] = {
+    "FnPatch.dylib",
+    "FnDiag",
+    "FnPatch.log",
+    "FnPatch.log.1",
+    "FnPatch.config",
+    "embedded.mobileprovision",
+};
+
+/*
+ * An App Store build has no embedded provisioning profile, a sideloaded one
+ * does. Denying it makes the container look like the store build instead of
+ * like a re-signed copy, and nothing in the game reads it at runtime.
+ */
+static bool g_hide_provision = true;
+
 static const char *const g_watch[] = {
     "FortniteClient-IOS-Shipping",
     "Info.plist",
@@ -49,8 +71,28 @@ static int g_hits;
 
 static bool is_hidden(const char *path)
 {
+    if (!path) {
+        return false;
+    }
     for (size_t i = 0; i < sizeof(g_hide_paths) / sizeof(g_hide_paths[0]); i++) {
         if (strstr(path, g_hide_paths[i])) {
+            return true;
+        }
+    }
+    if (g_hide_provision && strstr(path, "embedded.mobileprovision")) {
+        return true;
+    }
+    return false;
+}
+
+static bool is_hidden_listing(const char *name)
+{
+    if (!name) {
+        return false;
+    }
+    for (size_t i = 0;
+         i < sizeof(g_hide_from_listing) / sizeof(g_hide_from_listing[0]); i++) {
+        if (strcmp(name, g_hide_from_listing[i]) == 0) {
             return true;
         }
     }
@@ -79,6 +121,8 @@ typedef int (*openat_t)(int, const char *, int, ...);
 typedef int (*stat_t)(const char *, struct stat *);
 typedef int (*access_t)(const char *, int);
 typedef FILE *(*fopen_t)(const char *, const char *);
+typedef struct dirent *(*readdir_t)(DIR *);
+typedef int (*readdir_r_t)(DIR *, struct dirent *, struct dirent **);
 
 static open_t   g_real_open;
 static openat_t g_real_openat;
@@ -86,6 +130,8 @@ static stat_t   g_real_stat;
 static stat_t   g_real_lstat;
 static access_t g_real_access;
 static fopen_t  g_real_fopen;
+static readdir_t g_real_readdir;
+static readdir_r_t g_real_readdir_r;
 
 static int hook_open(const char *path, int flags, mode_t mode)
 {
@@ -149,11 +195,59 @@ static FILE *hook_fopen(const char *path, const char *mode)
     return g_real_fopen ? g_real_fopen(path, mode) : NULL;
 }
 
+static struct dirent *hook_readdir(DIR *dirp)
+{
+    if (!g_real_readdir) {
+        errno = EBADF;
+        return NULL;
+    }
+    struct dirent *ent;
+    int skipped = 0;
+    while ((ent = g_real_readdir(dirp)) != NULL) {
+        if (is_hidden_listing(ent->d_name)) {
+            skipped++;
+            continue;
+        }
+        break;
+    }
+    if (skipped) {
+        FNLOG("fs: readdir hid %d entries", skipped);
+    }
+    return ent;
+}
+
+static int hook_readdir_r(DIR *dirp, struct dirent *entry, struct dirent **result)
+{
+    if (!g_real_readdir_r) {
+        return EBADF;
+    }
+    for (;;) {
+        struct dirent *out = NULL;
+        int rc = g_real_readdir_r(dirp, entry, &out);
+        if (rc != 0) {
+            if (result) {
+                *result = out;
+            }
+            return rc;
+        }
+        if (!out || !is_hidden_listing(out->d_name)) {
+            if (result) {
+                *result = out;
+            }
+            return 0;
+        }
+        FNLOG("fs: readdir_r hid %s", out->d_name);
+    }
+}
+
 void mod_fileint_install(void)
 {
     if (!fn_cfg_flag("fileint", 1)) {
         return;
     }
+
+    g_hide_provision = fn_cfg_flag("hide_provision", 1) != 0;
+    FNLOG("fileint: hide_provision=%d", g_hide_provision ? 1 : 0);
 
     struct {
         const char *name;
@@ -166,6 +260,8 @@ void mod_fileint_install(void)
         { "lstat",   (void *)hook_lstat,   (void **)&g_real_lstat  },
         { "access",  (void *)hook_access,  (void **)&g_real_access },
         { "fopen",   (void *)hook_fopen,   (void **)&g_real_fopen  },
+        { "readdir", (void *)hook_readdir, (void **)&g_real_readdir },
+        { "readdir_r", (void *)hook_readdir_r, (void **)&g_real_readdir_r },
     };
 
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {

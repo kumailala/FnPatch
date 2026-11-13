@@ -25,6 +25,9 @@ typedef struct fn_hook {
 /* mprotect a code page writable via COW (works on shared-cache pages). */
 bool fn_vm_writable(void *addr, size_t len);
 
+/* Put a page back to read+execute after a patch. */
+void fn_make_executable(void *addr, size_t len);
+
 /* Force `mov w0,#value ; ret` / `ret` over the entry point. */
 bool fn_patch_ret_w0(void *target, int32_t value);
 bool fn_patch_ret_void(void *target);

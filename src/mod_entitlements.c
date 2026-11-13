@@ -40,31 +40,47 @@ static CFTypeRef hook_copy_ent(void *task, CFStringRef key, CFErrorRef *err)
 static CFTypeRef hook_copy_ents(void *task, CFArrayRef keys, CFErrorRef *err)
 {
     CFTypeRef real = g_real_copy_ents ? g_real_copy_ents(task, keys, err) : NULL;
-    CFMutableDictionaryRef merged = fn_entitlements();
-    if (!merged) {
+
+    /*
+     * Ours last: the real dictionary carries get-task-allow and the sideload's
+     * team id, and those are exactly the fields being asked about. Merging in
+     * the other order would let the real values win.
+     */
+    CFMutableDictionaryRef out = NULL;
+    if (real && CFGetTypeID(real) == CFDictionaryGetTypeID()) {
+        out = CFDictionaryCreateMutableCopy(NULL, 0, (CFDictionaryRef)real);
+    } else {
+        out = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,
+                                        &kCFTypeDictionaryValueCallBacks);
+    }
+    if (!out) {
         if (real) {
             CFRelease(real);
         }
         return NULL;
     }
-    if (real && CFGetTypeID(real) == CFDictionaryGetTypeID()) {
-        CFIndex n = CFDictionaryGetCount((CFDictionaryRef)real);
+
+    CFMutableDictionaryRef spoof = fn_entitlements();
+    if (spoof) {
+        CFIndex n = CFDictionaryGetCount(spoof);
         const void **ks = calloc((size_t)n, sizeof(void *));
         const void **vs = calloc((size_t)n, sizeof(void *));
         if (ks && vs) {
-            CFDictionaryGetKeysAndValues((CFDictionaryRef)real, ks, vs);
+            CFDictionaryGetKeysAndValues(spoof, ks, vs);
             for (CFIndex i = 0; i < n; i++) {
-                CFDictionarySetValue(merged, ks[i], vs[i]);
+                CFDictionarySetValue(out, ks[i], vs[i]);
             }
         }
         free(ks);
         free(vs);
+        CFRelease(spoof);
     }
+
     if (real) {
         CFRelease(real);
     }
     FNLOG("entitlements: bulk request spoofed");
-    return merged;
+    return out;
 }
 
 static CFStringRef hook_copy_sid(void *task, CFErrorRef *err)

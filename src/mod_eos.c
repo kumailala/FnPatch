@@ -18,11 +18,41 @@
 typedef int32_t (*poll_status_t)(void *, int32_t *);
 typedef int32_t (*session_t)(const void *);
 typedef int32_t (*recv_server_t)(void *, const void *);
+typedef uint64_t (*notify_t)(void *, const void *, void *, void *);
 
 static poll_status_t g_real_poll;
 static session_t    g_real_begin;
 static recv_server_t g_real_recv;
 static bool          g_drop_server;
+
+/*
+ * The integrity-violation and peer-action notifications are the SDK's way of
+ * telling the game that the client failed its own check. Registering nothing
+ * means the callback never runs, so the kick path never gets its input while
+ * the rest of the anti-cheat client keeps talking to the service normally.
+ * Returns EOS_INVALID_NOTIFICATIONID (0).
+ */
+static uint64_t hook_notify_integrity(void *handle, const void *options,
+                                      void *client_data, void *callback)
+{
+    (void)handle;
+    (void)options;
+    (void)client_data;
+    (void)callback;
+    FNLOG("eos: AddNotifyClientIntegrityViolated swallowed");
+    return 0;
+}
+
+static uint64_t hook_notify_peer_action(void *handle, const void *options,
+                                        void *client_data, void *callback)
+{
+    (void)handle;
+    (void)options;
+    (void)client_data;
+    (void)callback;
+    FNLOG("eos: AddNotifyPeerActionRequired swallowed");
+    return 0;
+}
 
 static int32_t hook_poll_status(void *handle, int32_t *violation)
 {
@@ -77,6 +107,31 @@ static bool install_eos(void)
         g_drop_server = fn_cfg_flag("eos_drop_server", 0) != 0;
         FNLOG("eos: ReceiveMessageFromServer hooked (drop=%d)", g_drop_server ? 1 : 0);
     }
+
+    void *ig = fn_sym("EOS_AntiCheatClient_AddNotifyClientIntegrityViolated");
+    if (ig) {
+        void *unused = NULL;
+        if (fn_hook_inline(ig, (void *)hook_notify_integrity, &unused)) {
+            FNLOG("eos: AddNotifyClientIntegrityViolated hooked");
+        } else {
+            FNLOG("eos: AddNotifyClientIntegrityViolated hook failed");
+        }
+    } else {
+        FNLOG("eos: AddNotifyClientIntegrityViolated absent");
+    }
+
+    void *pa = fn_sym("EOS_AntiCheatClient_AddNotifyPeerActionRequired");
+    if (pa) {
+        void *unused = NULL;
+        if (fn_hook_inline(pa, (void *)hook_notify_peer_action, &unused)) {
+            FNLOG("eos: AddNotifyPeerActionRequired hooked");
+        } else {
+            FNLOG("eos: AddNotifyPeerActionRequired hook failed");
+        }
+    } else {
+        FNLOG("eos: AddNotifyPeerActionRequired absent");
+    }
+
     (void)tramp;
     return true;
 }

@@ -6,6 +6,7 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <dlfcn.h>
+#include <string.h>
 
 /*
  * Security/SecCode.h is macOS-only, but the symbols behind these strings are
@@ -13,20 +14,39 @@
  */
 typedef uint32_t SecCSFlags;
 
+#ifndef __MACTYPES__
+typedef int32_t OSStatus;
+#endif
+
 #define FN_SEC_INFO_IDENTIFIER   CFSTR("identifier")
 #define FN_SEC_INFO_TEAM         CFSTR("teamid")
 #define FN_SEC_INFO_FLAGS        CFSTR("flags")
 #define FN_SEC_INFO_ENTITLEMENTS CFSTR("entitlements-dict")
+#define FN_SEC_INFO_UNIQUE       CFSTR("unique")
+#define FN_SEC_INFO_CDHASHES     CFSTR("cdhashes")
 
-/*
- * Every signature verdict the client can consume is reduced to success here.
- * Only functions whose sole output is an OSStatus are hard-patched, so a
- * caller can never read an out-parameter we failed to fill.
- */
+/* Opaque signature verdicts are reduced to success; anything with an
+ * out-parameter is answered rather than patched, so no caller reads a buffer
+ * we failed to fill. */
 
 typedef OSStatus (*copyinfo_t)(const void *, SecCSFlags, CFDictionaryRef *);
+typedef int (*csops_t)(int, unsigned int, void *, size_t);
 
 static copyinfo_t g_real_copy_info;
+static csops_t    g_real_csops;
+
+/*
+ * bsd/sys/codesign.h. Only the two operations the client can draw a verdict
+ * from are handled; everything else falls through to the kernel.
+ */
+#define FN_CS_OPS_STATUS 0
+#define FN_CS_OPS_CDHASH 5
+
+#define FN_CS_VALID          0x00000001u
+#define FN_CS_GET_TASK_ALLOW 0x00000004u
+#define FN_CS_DEBUGGED       0x10000000u
+
+static const uint8_t g_cdharsh_bytes[20] = { FN_CDHASH_BYTES };
 
 static OSStatus hook_check3(const void *code, SecCSFlags flags, const void *req)
 {
@@ -47,6 +67,11 @@ static OSStatus hook_check4(const void *code, SecCSFlags flags, const void *req,
         *err = NULL;
     }
     return 0;
+}
+
+static CFTypeRef cdhash_data(void)
+{
+    return CFDataCreate(NULL, g_cdharsh_bytes, (CFIndex)sizeof(g_cdharsh_bytes));
 }
 
 static OSStatus hook_copy_info(const void *code, SecCSFlags flags, CFDictionaryRef *info)
@@ -71,6 +96,17 @@ static OSStatus hook_copy_info(const void *code, SecCSFlags flags, CFDictionaryR
             int32_t zero = 0;
             CFNumberRef flags_num = CFNumberCreate(NULL, kCFNumberSInt32Type, &zero);
 
+            CFTypeRef cd = cdhash_data();
+            if (cd) {
+                CFDictionarySetValue(m, FN_SEC_INFO_UNIQUE, cd);
+                const void *items[1] = { cd };
+                CFArrayRef arr = CFArrayCreate(NULL, items, 1, &kCFTypeArrayCallBacks);
+                if (arr) {
+                    CFDictionarySetValue(m, FN_SEC_INFO_CDHASHES, arr);
+                    CFRelease(arr);
+                }
+                CFRelease(cd);
+            }
             CFDictionarySetValue(m, FN_SEC_INFO_IDENTIFIER, ident);
             CFDictionarySetValue(m, FN_SEC_INFO_TEAM, team);
             CFDictionarySetValue(m, FN_SEC_INFO_FLAGS, flags_num);
@@ -87,6 +123,33 @@ static OSStatus hook_copy_info(const void *code, SecCSFlags flags, CFDictionaryR
     }
     FNLOG("codesign: copy_signing_information -> %d", (int)st);
     return st;
+}
+
+/*
+ * A sideloaded build carries CS_GET_TASK_ALLOW and CS_DEBUGGED; a store build
+ * carries neither. The status word is sanitised rather than faked, and the
+ * CDHash is the same value SecCodeCopySigningInformation reports, so the two
+ * answers never contradict each other.
+ */
+static int hook_csops(int pid, unsigned int ops, void *addr, size_t size)
+{
+    if (ops == FN_CS_OPS_STATUS && addr && size >= sizeof(uint32_t)) {
+        int rc = g_real_csops ? g_real_csops(pid, ops, addr, size) : -1;
+        if (rc == 0) {
+            uint32_t flags = *(uint32_t *)addr;
+            uint32_t clean = (flags & ~(FN_CS_GET_TASK_ALLOW | FN_CS_DEBUGGED)) | FN_CS_VALID;
+            if (clean != flags) {
+                FNLOG("codesign: csops status 0x%08x -> 0x%08x", flags, clean);
+                *(uint32_t *)addr = clean;
+            }
+        }
+        return rc;
+    }
+    if (ops == FN_CS_OPS_CDHASH && addr && size >= sizeof(g_cdharsh_bytes)) {
+        memcpy(addr, g_cdharsh_bytes, sizeof(g_cdharsh_bytes));
+        return 0;
+    }
+    return g_real_csops ? g_real_csops(pid, ops, addr, size) : -1;
 }
 
 void mod_codesign_install(void)
@@ -139,14 +202,12 @@ void mod_codesign_install(void)
         FNLOG("codesign: SecCodeCopySigningInformation absent");
     }
 
-    if (fn_cfg_flag("patch_csops", 0)) {
+    if (fn_cfg_flag("csops", 1)) {
         void *csops = fn_sym("csops");
-        if (csops && fn_patch_ret_w0(csops, 0)) {
-            FNLOG("codesign: csops -> 0");
-        }
-        void *csops_audit = fn_sym("csops_audittoken");
-        if (csops_audit && fn_patch_ret_w0(csops_audit, 0)) {
-            FNLOG("codesign: csops_audittoken -> 0");
+        if (csops && fn_hook_inline(csops, (void *)hook_csops, (void **)&g_real_csops)) {
+            FNLOG("codesign: csops hooked");
+        } else {
+            FNLOG("codesign: csops hook failed");
         }
     }
 }

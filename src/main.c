@@ -52,10 +52,12 @@ static void write_default_config(void)
         "# FnPatch " FN_PATCH_VERSION "\n"
         "# 1 = module on, 0 = module off\n"
         "hide_images=1\n"
+        "scrub_header=1\n"
         "codesign=1\n"
-        "patch_csops=0\n"
+        "csops=1\n"
         "entitlements=1\n"
         "fileint=1\n"
+        "hide_provision=1\n"
         "eos=1\n"
         "eos_drop_server=0\n"
         "offsets=1\n"
@@ -85,6 +87,7 @@ static void fnpatch_init(void)
 
     write_default_config();
 
+    mod_header_scrub_install();
     mod_hide_install();
     mod_codesign_install();
     mod_entitlements_install();
@@ -93,5 +96,5 @@ static void fnpatch_init(void)
     mod_offsets_install();
     mod_popup_install();
 
-    FNLOG("FnPatch init complete, log at $HOME/Documents/FnPatch.log");
+    FNLOG("FnPatch init complete, log at Documents/FnDiag/FnPatch.log");
 }

@@ -2,6 +2,7 @@
 #define FNPATCH_MODULES_H
 
 void mod_hide_install(void);
+void mod_header_scrub_install(void);
 void mod_codesign_install(void);
 void mod_entitlements_install(void);
 void mod_fileint_install(void);

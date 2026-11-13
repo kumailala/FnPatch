@@ -110,10 +110,12 @@ in `Documents/FnDiag/FnPatch.config` (offsets are relative to the Mach-O header)
 
 ```
 hide_images=1
+scrub_header=1
 codesign=1
-patch_csops=0
+csops=1
 entitlements=1
 fileint=1
+hide_provision=1
 eos=1
 eos_drop_server=0
 offsets=1
@@ -122,6 +124,15 @@ ret0=0x123456
 ret1=0x123456
 retvoid=0x123456
 ```
+
+- `scrub_header` removes the injected `LC_LOAD_DYLIB` from the in-memory Mach-O
+  header, so a load-command walk sees the stock layout. The file on disk is
+  untouched.
+- `csops` hooks `csops(2)` and rewrites `CS_OPS_STATUS` (drops `CS_DEBUGGED` and
+  `CS_GET_TASK_ALLOW`, adds `CS_VALID`) and `CS_OPS_CDHASH` (answers with the
+  stock IPA's CDHash), so kernel-level queries agree with the userspace answer.
+- `hide_provision` denies `embedded.mobileprovision`. A store build has none, a
+  sideload does, and nothing in the game reads it at runtime.
 
 ## Honest notes
 

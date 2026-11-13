@@ -45,7 +45,7 @@ bool fn_vm_writable(void *addr, size_t len)
 }
 
 /* Restore execute-only protection after patching, so the page does not stay writable. */
-static void fn_vm_executable(void *addr, size_t len)
+void fn_make_executable(void *addr, size_t len)
 {
     vm_size_t ps = 0;
     host_page_size(mach_host_self(), &ps);
@@ -84,7 +84,7 @@ bool fn_patch_ret_w0(void *target, int32_t value)
     }
     memcpy(target, insn, sizeof(insn));
     sys_icache_invalidate(target, sizeof(insn));
-    fn_vm_executable(target, sizeof(insn));
+    fn_make_executable(target, sizeof(insn));
     return true;
 }
 
@@ -99,7 +99,7 @@ bool fn_patch_ret_void(void *target)
     }
     memcpy(target, &insn, sizeof(insn));
     sys_icache_invalidate(target, sizeof(insn));
-    fn_vm_executable(target, sizeof(insn));
+    fn_make_executable(target, sizeof(insn));
     return true;
 }
 
@@ -294,7 +294,7 @@ fn_hook *fn_hook_inline(void *target, void *handler, void **trampoline_out)
             return NULL;
         }
     } else {
-        fn_vm_executable(tramp, FN_TRAMP_BYTES);
+        fn_make_executable(tramp, FN_TRAMP_BYTES);
     }
     sys_icache_invalidate(tramp, 64);
 
@@ -318,7 +318,7 @@ fn_hook *fn_hook_inline(void *target, void *handler, void **trampoline_out)
     emit_branch(patch, (uintptr_t)handler);
     memcpy(target, patch, 16);
     sys_icache_invalidate(target, 16);
-    fn_vm_executable(target, 16);
+    fn_make_executable(target, 16);
 
     if (trampoline_out) {
         *trampoline_out = tramp;
