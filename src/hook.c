@@ -3,6 +3,7 @@
 
 #include <dlfcn.h>
 #include <mach/mach.h>
+#include <mach/mach_host.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
 #include <stdlib.h>

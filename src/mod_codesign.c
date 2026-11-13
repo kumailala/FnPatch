@@ -84,7 +84,6 @@ void mod_codesign_install(void)
         "SecStaticCodeCheckValidity",
         "SecCodeCheckValidity",
         "MISValidateSignature",
-        "SecCodeValidateMarshal",
     };
     static const char *const check4_names[] = {
         "SecStaticCodeCheckValidityWithErrors",

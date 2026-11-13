@@ -6,6 +6,8 @@
 void fn_log_init(void);
 void fn_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
+#define FNLOG(...) fn_log(__VA_ARGS__)
+
 /*
  * Config lives at $HOME/Documents/FnPatch.config, one `key=value` per line.
  * A missing file means defaults. Values are cached after the first read.
