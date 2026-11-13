@@ -15,6 +15,12 @@
 static pthread_mutex_t g_log_lock = PTHREAD_MUTEX_INITIALIZER;
 static char            g_log_path[512];
 
+/*
+ * fopen is hooked by mod_fileint, which logs through here. Without this the
+ * logger would re-enter itself through the hook and blow the stack.
+ */
+static __thread int g_in_log;
+
 static struct { char key[128]; char val[128]; } g_cfg[FN_CFG_MAX_LINES];
 static int  g_cfg_count = -1;
 
@@ -117,9 +123,13 @@ void fn_log_init(void)
         fclose(f);
     }
 }
-
 void fn_log(const char *fmt, ...)
 {
+    if (g_in_log) {
+        return;
+    }
+    g_in_log = 1;
+
     va_list ap;
     va_start(ap, fmt);
     char msg[1024];
@@ -136,4 +146,6 @@ void fn_log(const char *fmt, ...)
         fclose(f);
     }
     pthread_mutex_unlock(&g_log_lock);
+
+    g_in_log = 0;
 }

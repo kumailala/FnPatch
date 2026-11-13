@@ -27,7 +27,11 @@ static CFTypeRef hook_copy_ent(void *task, CFStringRef key, CFErrorRef *err)
         if (err) {
             *err = NULL;
         }
-        FNLOG("entitlements: %s spoofed", "key");
+        char name[128] = "?";
+        if (key) {
+            CFStringGetCString(key, name, sizeof(name), kCFStringEncodingUTF8);
+        }
+        FNLOG("entitlements: %s spoofed", name);
         return spoof;
     }
     return g_real_copy_ent ? g_real_copy_ent(task, key, err) : NULL;

@@ -17,6 +17,7 @@
 #define A64_MOV_W0_0    0x52800000u
 
 static bool is_adrp(uint32_t i)      { return (i & 0x9F000000u) == 0x90000000u; }
+static bool is_ret(uint32_t i)       { return (i & 0xFFFFFC1Fu) == 0xD65F0000u; }
 static bool is_b_uncond(uint32_t i)  { return (i & 0x7C000000u) == 0x14000000u; }
 static bool is_bcond(uint32_t i)     { return (i & 0xFF000010u) == 0x54000000u; }
 static bool is_cbz(uint32_t i)       { return (i & 0x7E000000u) == 0x34000000u; }
@@ -41,6 +42,20 @@ bool fn_vm_writable(void *addr, size_t len)
         return false;
     }
     return true;
+}
+
+/* Restore execute-only protection after patching, so the page does not stay writable. */
+static void fn_vm_executable(void *addr, size_t len)
+{
+    vm_size_t ps = 0;
+    host_page_size(mach_host_self(), &ps);
+    if (!ps) {
+        ps = 16384;
+    }
+    uintptr_t page = (uintptr_t)addr & ~(uintptr_t)(ps - 1);
+    size_t    off  = (uintptr_t)addr - page;
+    size_t    size = ((off + len + ps - 1) / ps) * ps;
+    vm_protect(mach_task_self(), page, size, false, VM_PROT_READ | VM_PROT_EXECUTE);
 }
 
 static void emit_branch(uint32_t *p, uintptr_t dest)
@@ -69,6 +84,7 @@ bool fn_patch_ret_w0(void *target, int32_t value)
     }
     memcpy(target, insn, sizeof(insn));
     sys_icache_invalidate(target, sizeof(insn));
+    fn_vm_executable(target, sizeof(insn));
     return true;
 }
 
@@ -83,6 +99,7 @@ bool fn_patch_ret_void(void *target)
     }
     memcpy(target, &insn, sizeof(insn));
     sys_icache_invalidate(target, sizeof(insn));
+    fn_vm_executable(target, sizeof(insn));
     return true;
 }
 
@@ -203,6 +220,12 @@ fn_hook *fn_hook_inline(void *target, void *handler, void **trampoline_out)
 
     uint32_t *src = (uint32_t *)target;
     for (int i = 0; i < 4; i++) {
+        /* A return before the last displaced slot means the function is shorter
+         * than 16 bytes; patching would overwrite the neighbouring function. */
+        if (is_ret(src[i]) && i < 3) {
+            FNLOG("hook_inline: %p is shorter than 16 bytes, refused", target);
+            return NULL;
+        }
         if (!relocatable(src[i])) {
             FNLOG("hook_inline: %p prologue insn %d (0x%08x) not relocatable",
                   target, i, src[i]);
@@ -253,6 +276,7 @@ fn_hook *fn_hook_inline(void *target, void *handler, void **trampoline_out)
     emit_branch(patch, (uintptr_t)handler);
     memcpy(target, patch, 16);
     sys_icache_invalidate(target, 16);
+    fn_vm_executable(target, 16);
 
     if (trampoline_out) {
         *trampoline_out = tramp;

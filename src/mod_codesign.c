@@ -134,7 +134,7 @@ void mod_codesign_install(void)
         FNLOG("codesign: SecCodeCopySigningInformation absent");
     }
 
-    if (fn_cfg_flag("patch_csops", 1)) {
+    if (fn_cfg_flag("patch_csops", 0)) {
         void *csops = fn_sym("csops");
         if (csops && fn_patch_ret_w0(csops, 0)) {
             FNLOG("codesign: csops -> 0");

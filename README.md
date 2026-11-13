@@ -34,7 +34,7 @@ There is no EAC framework in the bundle. The stack is:
 | module | target | effect |
 |---|---|---|
 | `mod_hide` | `_dyld_image_count` / `_dyld_get_image_name` / `_dyld_get_image_header` | image list is served from a filtered snapshot with indices remapped; FnPatch, Substrate, frida and friends are not there |
-| `mod_codesign` | `SecStaticCodeCheckValidity`, `SecCodeCheckValidity`, `…WithErrors`, `MISValidateSignature`, `SecCodeCopySigningInformation`, `csops`, `csops_audittoken` | every signature verdict is success; signing info reports Epic's team |
+| `mod_codesign` | `SecStaticCodeCheckValidity`, `SecCodeCheckValidity`, `…WithErrors`, `MISValidateSignature`, `SecCodeCopySigningInformation`, `csops`, `csops_audittoken` | every signature verdict is success; signing info reports Epic's team. `csops` patching is off by default — it returns an OSStatus without filling the caller's status buffer, so it is opt-in via `patch_csops=1` |
 | `mod_entitlements` | `SecTaskCopyValueForEntitlement`, `SecTaskCopyValuesForEntitlements`, `SecTaskCopySigningIdentifier` | the kernel-side identity reads back as `JPKKQ2FLA9` / `com.epicgames.FortniteGame` |
 | `mod_fileint` | `open`, `openat`, `stat`, `lstat`, `access`, `fopen` | nothing can open or stat the dylib; every integrity-looking path is logged |
 | `mod_eos` | `EOS_AntiCheatClient_PollStatus`, `BeginSession`, `ReceiveMessageFromServer` | violations are forced to `EOS_ACCVT_NoViolation`, the session call returns `EOS_Success`, server messages are dropped |
@@ -109,7 +109,7 @@ in `Documents/FnPatch.config` (offsets are relative to the Mach-O header).
 ```
 hide_images=1
 codesign=1
-patch_csops=1
+patch_csops=0
 entitlements=1
 fileint=1
 eos=1

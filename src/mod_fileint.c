@@ -21,7 +21,6 @@
 
 static const char *const g_hide_paths[] = {
     "FnPatch.dylib",
-    "FnPatch",
     "CydiaSubstrate",
     "Substrate",
     "libhooker",

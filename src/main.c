@@ -47,7 +47,7 @@ static void write_default_config(void)
         "# 1 = module on, 0 = module off\n"
         "hide_images=1\n"
         "codesign=1\n"
-        "patch_csops=1\n"
+        "patch_csops=0\n"
         "entitlements=1\n"
         "fileint=1\n"
         "eos=1\n"

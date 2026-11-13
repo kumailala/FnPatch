@@ -20,9 +20,44 @@ jobs:
           chmod +x build.sh
           ./build.sh FnPatch.dylib
 
+      - name: Strict rebuild (warnings are errors)
+        run: |
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun -sdk iphoneos clang -arch arm64 -dynamiclib -fsyntax-only \
+            -O2 -fobjc-arc -Isrc -isysroot "$SDK" \
+            -miphoneos-version-min=15.0 \
+            -Wall -Wextra -Werror \
+            -Wno-unused-parameter -Wno-unused-function \
+            src/*.c
+
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: FnPatch-dylib
           path: FnPatch.dylib
           if-no-files-found: error
+
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build host harness
+        run: |
+          clang -Isrc -O1 -Wall -Wextra -Wno-unused-parameter \
+            -o hook_test tests/hook_test.c src/log.c
+
+      - name: Run relocator and patcher checks
+        run: ./hook_test
+
+  injector:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Mach-O injection test
+        run: python tests/test_inject.py
