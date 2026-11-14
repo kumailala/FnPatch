@@ -33,7 +33,8 @@ There is no EAC framework in the bundle. The stack is:
 
 | module | target | effect |
 |---|---|---|
-| `mod_hide` | `_dyld_image_count` / `_dyld_get_image_name` / `_dyld_get_image_header` | the list is filtered live and indices are remapped, so an index from `count()` is always valid for `name()`/`header()`; FnPatch, Substrate, frida and friends are not there |
+| `mod_uacslot` | `UACClient::Send`, vtable entry 35 in `__DATA_CONST` | the message gate: for codes `{5,19,23,49}` sent with `flag==1` it returns true without serialising, queueing or sending. Everything else tail-calls the original. This is the module aimed at the kick |
+| `mod_hide` | `_dyld_image_count` / `_dyld_get_image_name` / `_dyld_get_image_header` | the list is filtered live and indices are remapped, so an index from `count()` is always valid for `name()`/`header()`; FnPatch, Substrate, frida and friends are not there. Off by default |
 | `mod_codesign` | `SecStaticCodeCheckValidity`, `SecCodeCheckValidity`, `…WithErrors`, `MISValidateSignature`, `SecCodeCopySigningInformation`, `csops`, `csops_audittoken` | every signature verdict is success; signing info reports Epic's team. `csops` patching is off by default — it returns an OSStatus without filling the caller's status buffer, so it is opt-in via `patch_csops=1` |
 | `mod_entitlements` | `SecTaskCopyValueForEntitlement`, `SecTaskCopyValuesForEntitlements`, `SecTaskCopySigningIdentifier` | the kernel-side identity reads back as `JPKKQ2FLA9` / `com.epicgames.FortniteGame` |
 | `mod_fileint` | `open`, `openat`, `stat`, `lstat`, `access`, `fopen` | nothing can open or stat the dylib; every integrity-looking path is logged |
@@ -109,7 +110,9 @@ in `Documents/FnDiag/FnPatch.config` (offsets are relative to the Mach-O header)
 `Documents/FnDiag/FnPatch.config`, written on first launch:
 
 ```
-hide_images=1
+uacslot=1
+uacslot_scan=1
+hide_images=0
 scrub_header=1
 codesign=1
 csops=1
@@ -153,7 +156,35 @@ retvoid=0x123456
   dylib's own import stubs, so the hooks land on the function the client calls.
   The list is filtered on every call, so images loaded after boot are still
   counted and indexed correctly.
-- iOS 15+ shipped binaries may use chained fixups; this design sidesteps that
-  entirely by patching code, not the symbol pointers.
+- iOS 15+ shipped binaries may use chained fixups. `mod_uacslot` sidesteps
+  the encoding entirely by scanning the loaded image at runtime, after dyld
+  has already rebound every pointer: the `__DATA_CONST` slot holds a plain
+  address there, not the packed `0x0010000007571028` form stored in the file.
+- `mod_uacslot` never allocates executable memory. It writes one 8-byte
+  pointer into an existing `__DATA_CONST` page under `VM_PROT_COPY`, and its
+  trampoline is an ordinary function in this dylib's own `__TEXT`.
+
+## The kick fix, as recovered
+
+The reference `Fn kick fix.dylib` does not patch code. It scans `__TEXT` for a
+33-word signature with branch immediates masked, requires exactly one match,
+requires exactly one 8-byte `__DATA_CONST` slot equal to that address, then
+`mach_vm_protect`s the page and compare-exchanges the pointer.
+
+For this build:
+
+```
+signature   0xd10143ff a90257f6 a9034ff4 a9047bfd 910103fd …   (33 words)
+matches     1   at vaddr 0x107571028  (file 0x7571028)
+slots       1   at vaddr 0x10ce5ad38  (vtable 0x10ce5ac20, entry 35)
+class       UACClient  (name string at 0x10be7ba6e)
+method      bool Send(UACClient *self, int code, void *data, bool flag)
+```
+
+The reference also hardcodes two offsets (`0x74c1334`, `0xcd32e18`) and an
+LC_UUID (`e40351ab-50a4-3f3e-b32b-a07a311d9b73`). This executable's UUID is
+`cc0231f5-9202-3ef0-8559-7eecbbcfc27d`, so its fast path never applies and the
+scan is the live route. FnPatch keeps the same two numbers as a fallback,
+guarded by a signature check before it is used.
 - The EOS anti-cheat client only exists once `EOSSDK` is loaded, so that module
   waits on a watchdog for up to 60 s.

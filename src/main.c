@@ -63,7 +63,12 @@ static void write_default_config(void)
     fputs(
         "# FnPatch " FN_PATCH_VERSION "\n"
         "# 1 = module on, 0 = module off\n"
-        "hide_images=1\n"
+        "uacslot=1\n"
+        "# 0 = skip the signature scan and use this build's known offsets\n"
+        "uacslot_scan=1\n"
+        "# codes suppressed with flag==1; overrides the built-in 5,19,23,49\n"
+        "# uacslot_codes=5,19,23,49\n"
+        "hide_images=0\n"
         "scrub_header=1\n"
         "codesign=1\n"
         "csops=1\n"
@@ -99,6 +104,14 @@ static void fnpatch_init(void)
 
     fn_step("scrub_header");
     mod_header_scrub_install();
+
+    /*
+     * Before everything else that hooks. This module only swaps a data
+     * pointer, so it cannot fail the way an executable-page trampoline does,
+     * and the kick is the one symptom that hides every other one.
+     */
+    fn_step("uacslot");
+    mod_uacslot_install();
 
     fn_step("hide_images");
     mod_hide_install();

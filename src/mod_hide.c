@@ -109,7 +109,13 @@ static void *resolve(const char *name)
 
 void mod_hide_install(void)
 {
-    if (!fn_cfg_flag("hide_images", 1)) {
+    /*
+     * Off by default. Nothing here needs the image list concealed: the kick
+     * fix is a vtable pointer swap, not an injected-library tell, and this
+     * module is the only one that hooks a libdyld function at boot. Turn it
+     * on only when a log says the client is looking at the image list.
+     */
+    if (!fn_cfg_flag("hide_images", 0)) {
         return;
     }
 
