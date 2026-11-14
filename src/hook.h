@@ -28,6 +28,15 @@ bool fn_vm_writable(void *addr, size_t len);
 /* Put a page back to read+execute after a patch. */
 void fn_make_executable(void *addr, size_t len);
 
+/* Same, but reports whether execute was actually restored. A false here means
+ * the page is now writable and non-executable and must never be executed. */
+bool fn_make_executable_ok(void *addr, size_t len);
+
+/* One-time probe: can this process restore execute after making a code page
+ * writable? False on kernels that refuse it, in which case no inline hook and
+ * no prologue patch may be attempted. */
+bool fn_code_patch_available(void);
+
 /* Put a data page back to read-only after a patch. */
 void fn_make_readonly(void *addr, size_t len);
 

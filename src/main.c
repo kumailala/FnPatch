@@ -155,6 +155,14 @@ static void fnpatch_init(void)
 
     write_default_config();
 
+    /*
+     * Ask once, on our own padding page, whether this process can ever put
+     * execute back on a page it made writable. The answer decides whether any
+     * inline hook is allowed to run at all.
+     */
+    fn_step("probe");
+    (void)fn_code_patch_available();
+
     fn_step("scrub_header");
     mod_header_scrub_install();
 

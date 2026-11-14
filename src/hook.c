@@ -37,6 +37,7 @@ static size_t page_size_cached(void)
 
 /* Defined below; used by the patch helpers above it. */
 static bool addr_in_signed_image(const void *p);
+static bool code_patch_supported(void);
 
 bool fn_vm_writable(void *addr, size_t len)
 {
@@ -77,6 +78,11 @@ bool fn_vm_writable(void *addr, size_t len)
  */
 void fn_make_executable(void *addr, size_t len)
 {
+    (void)fn_make_executable_ok(addr, len);
+}
+
+bool fn_make_executable_ok(void *addr, size_t len)
+{
     size_t ps = page_size_cached();
     uintptr_t page = (uintptr_t)addr & ~(uintptr_t)(ps - 1);
     size_t    off  = (uintptr_t)addr - page;
@@ -85,24 +91,25 @@ void fn_make_executable(void *addr, size_t len)
     kern_return_t kr = vm_protect(mach_task_self(), page, size, false,
                                   VM_PROT_READ | VM_PROT_EXECUTE);
     if (kr == KERN_SUCCESS) {
-        return;
+        return true;
     }
 
     kern_return_t krw = vm_protect(mach_task_self(), page, size, false,
                                    VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
     if (krw == KERN_SUCCESS) {
         FNLOG("make_executable: %p kept RWX (R|X refused 0x%x)", addr, kr);
-        return;
+        return true;
     }
 
     if (mprotect((void *)page, size, PROT_READ | PROT_EXEC) == 0) {
         FNLOG("make_executable: %p restored via mprotect (vm_protect 0x%x/0x%x)",
               addr, kr, krw);
-        return;
+        return true;
     }
 
-    FNLOG("make_executable: FAILED at %p (0x%x/0x%x) page left writable, "
-          "next call into it will fault", addr, kr, krw);
+    FNLOG("make_executable: FAILED at %p (0x%x/0x%x) page left writable and "
+          "non-executable", addr, kr, krw);
+    return false;
 }
 
 /*
@@ -143,6 +150,9 @@ bool fn_patch_ret_w0(void *target, int32_t value)
         FNLOG("fn_patch_ret_w0: %p refused, not in an app-bundle image", target);
         return false;
     }
+    if (!code_patch_supported()) {
+        return false;
+    }
     uint32_t insn[2];
     if (value >= 0 && value <= 0xFFFF) {
         /* mov w0, #imm16 */
@@ -168,6 +178,9 @@ bool fn_patch_ret_void(void *target)
     }
     if (!fn_cfg_flag("hook_any", 0) && !addr_in_signed_image(target)) {
         FNLOG("fn_patch_ret_void: %p refused, not in an app-bundle image", target);
+        return false;
+    }
+    if (!code_patch_supported()) {
         return false;
     }
     uint32_t insn = A64_RET;
@@ -288,6 +301,53 @@ static void *cave_alloc(size_t size)
     return p;
 }
 
+/*
+ * One-time capability probe, on the cave page and nowhere else.
+ *
+ * On this kernel vm_protect(R|W|COPY) succeeds on a signed code page but the
+ * reverse request never does: R|X is refused, R|W|X is refused, mprotect(P|E)
+ * is refused. A page treated that way is left writable and NON-EXECUTABLE and
+ * can never be recovered in that process. Doing that to a page that holds real
+ * code is an instant, unrecoverable SIGSEGV — which is exactly what happened
+ * to `open()` at 0x114190de0 in the 1.0.1 run.
+ *
+ * So the question is asked once, on the trampoline cave, which is a whole
+ * page of padding that contains no code. If the answer is no, every inline
+ * hook and every prologue patch refuses from then on and the app boots with
+ * only the data-side work (uacslot), which is the part that fixes the kick.
+ */
+static bool code_patch_supported(void)
+{
+    static int cached = -1;
+    if (cached >= 0) {
+        return cached == 1;
+    }
+
+    void *probe = (void *)g_tramp_cave;
+    if (!fn_vm_writable(probe, 16)) {
+        cached = 0;
+        FNLOG("hook: cannot make a code page writable; inline hooks disabled");
+        return false;
+    }
+
+    bool ok = fn_make_executable_ok(probe, 16);
+    cached = ok ? 1 : 0;
+
+    if (ok) {
+        FNLOG("hook: inline patching available (probe page %p restored)", probe);
+    } else {
+        FNLOG("hook: execute CANNOT be restored after a write on this process; "
+              "all inline hooks and prologue patches are disabled. uacslot is "
+              "unaffected: it swaps a data pointer and never patches code.");
+    }
+    return ok;
+}
+
+bool fn_code_patch_available(void)
+{
+    return code_patch_supported();
+}
+
 static void *alloc_near(uintptr_t target)
 {
     const size_t size = FN_HOOK_TRAMP_PAGES * 16384;
@@ -389,6 +449,12 @@ fn_hook *fn_hook_inline(void *target, void *handler, void **trampoline_out)
     if (!fn_cfg_flag("hook_any", 0) && !addr_in_signed_image(target)) {
         FNLOG("hook_inline: %p refused, not in an app-bundle image "
               "(shared cache pages lose execute on restore)", target);
+        return NULL;
+    }
+
+    if (!code_patch_supported()) {
+        FNLOG("hook_inline: %p refused, this process cannot restore execute "
+              "after a code write", target);
         return NULL;
     }
 
