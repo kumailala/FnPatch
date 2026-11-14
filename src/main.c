@@ -148,3 +148,4 @@ static void fnpatch_init(void)
     fn_step("done");
     FNLOG("FnPatch init complete, log at Documents/FnDiag/FnPatch.log");
 }
+
