@@ -35,6 +35,9 @@ static size_t page_size_cached(void)
     return cached;
 }
 
+/* Defined below; used by the patch helpers above it. */
+static bool addr_in_signed_image(const void *p);
+
 bool fn_vm_writable(void *addr, size_t len)
 {
     size_t ps = page_size_cached();
@@ -51,18 +54,55 @@ bool fn_vm_writable(void *addr, size_t len)
     return true;
 }
 
-/* Restore execute-only protection after patching, so the page does not stay writable. */
+/*
+ * Restore read+execute after a patch.
+ *
+ * This used to be a single vm_protect(R|X) whose failure was logged and then
+ * ignored. On this device that call returns KERN_PROTECTION_FAILURE (0x2) for
+ * any page that has just been made writable with VM_PROT_COPY, which leaves
+ * the page writable and NON-EXECUTABLE. The next branch into it is a SIGSEGV
+ * with no useful backtrace, and it is what killed the 10:57 build: the
+ * trampoline cave shares a page with our own code, so the first inline hook
+ * took the dylib down with it.
+ *
+ * Three attempts, in order of how much we want them:
+ *   1. R|X              - correct.
+ *   2. R|W|X            - keeps execute. Writability is a smaller sin than a
+ *                         non-executable code page, and on a sideloaded
+ *                         (get-task-allow) process the kernel usually allows
+ *                         this when it refuses step 1.
+ *   3. mprotect(P|E)    - different path to the same protection.
+ * Only if all three fail is the page left writable, and that is logged loudly
+ * because it is a guaranteed crash on the next call into the page.
+ */
 void fn_make_executable(void *addr, size_t len)
 {
     size_t ps = page_size_cached();
     uintptr_t page = (uintptr_t)addr & ~(uintptr_t)(ps - 1);
     size_t    off  = (uintptr_t)addr - page;
     size_t    size = ((off + len + ps - 1) / ps) * ps;
+
     kern_return_t kr = vm_protect(mach_task_self(), page, size, false,
                                   VM_PROT_READ | VM_PROT_EXECUTE);
-    if (kr != KERN_SUCCESS) {
-        FNLOG("make_executable failed at %p (0x%x)", addr, kr);
+    if (kr == KERN_SUCCESS) {
+        return;
     }
+
+    kern_return_t krw = vm_protect(mach_task_self(), page, size, false,
+                                   VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
+    if (krw == KERN_SUCCESS) {
+        FNLOG("make_executable: %p kept RWX (R|X refused 0x%x)", addr, kr);
+        return;
+    }
+
+    if (mprotect((void *)page, size, PROT_READ | PROT_EXEC) == 0) {
+        FNLOG("make_executable: %p restored via mprotect (vm_protect 0x%x/0x%x)",
+              addr, kr, krw);
+        return;
+    }
+
+    FNLOG("make_executable: FAILED at %p (0x%x/0x%x) page left writable, "
+          "next call into it will fault", addr, kr, krw);
 }
 
 static void emit_branch(uint32_t *p, uintptr_t dest)
@@ -75,6 +115,10 @@ static void emit_branch(uint32_t *p, uintptr_t dest)
 bool fn_patch_ret_w0(void *target, int32_t value)
 {
     if (!target) {
+        return false;
+    }
+    if (!fn_cfg_flag("hook_any", 0) && !addr_in_signed_image(target)) {
+        FNLOG("fn_patch_ret_w0: %p refused, not in an app-bundle image", target);
         return false;
     }
     uint32_t insn[2];
@@ -98,6 +142,10 @@ bool fn_patch_ret_w0(void *target, int32_t value)
 bool fn_patch_ret_void(void *target)
 {
     if (!target) {
+        return false;
+    }
+    if (!fn_cfg_flag("hook_any", 0) && !addr_in_signed_image(target)) {
+        FNLOG("fn_patch_ret_void: %p refused, not in an app-bundle image", target);
         return false;
     }
     uint32_t insn = A64_RET;
@@ -194,14 +242,16 @@ static uint32_t relocate(uint32_t i, uintptr_t from, uintptr_t to, bool *ok)
 #define FN_TRAMP_BYTES     32
 
 /*
- * Fallback trampoline pool inside this dylib's own __TEXT. Some environments
- * deny new executable mappings (no JIT entitlement) but still allow a signed
- * code page to be copied-on-write, which is exactly what the inline patch
- * itself needs. The pool exists so a hook keeps working in that case.
+ * Trampoline pool inside this dylib's own __TEXT.
+ *
+ * It is page-aligned and exactly one page so that making it writable, and any
+ * failure to make it executable again, cannot take real code down with it. At
+ * 32 bytes per trampoline one page holds 512 hooks; the old unaligned 64 KB
+ * array shared its first page with fn_hook_inline itself.
  */
-#define FN_TRAMP_CAVE_BYTES (64 * 1024)
+#define FN_TRAMP_CAVE_BYTES 16384
 
-__attribute__((used, aligned(16), section("__TEXT,__text")))
+__attribute__((used, aligned(16384), section("__TEXT,__text")))
 static uint8_t g_tramp_cave[FN_TRAMP_CAVE_BYTES];
 static size_t  g_tramp_used;
 
@@ -243,9 +293,80 @@ static void *alloc_near(uintptr_t target)
     return NULL;
 }
 
+/*
+ * Inline hooking is only safe inside an image the installer signed, which on a
+ * sideload means the app bundle: the main executable and the frameworks beside
+ * it.
+ *
+ * Everything in /usr/lib and /System lives in the dyld shared cache, which is
+ * mapped once and shared by every process on the device. vm_protect with
+ * VM_PROT_COPY on one of those pages gives us a private copy, but the copy
+ * loses execute on this kernel and the restore path refuses to give it back.
+ * That is the second bug in the 10:57 build: mod_codesign walked straight into
+ * SecCodeCheckValidity and killed the process inside its own trampoline.
+ *
+ * The guard is a name test rather than an address test because the shared
+ * cache base moves between iOS versions and the app container path does not.
+ * `hook_any=1` re-enables the old behaviour for anyone who wants to retest it.
+ */
+static bool image_is_app_bundle(const char *name)
+{
+    if (!name) {
+        return false;
+    }
+    return strstr(name, "/Bundle/Application/") != NULL ||
+           strstr(name, ".app/") != NULL;
+}
+
+static bool addr_in_signed_image(const void *p)
+{
+    uintptr_t a = (uintptr_t)p;
+    uint32_t n = _dyld_image_count();
+
+    for (uint32_t i = 0; i < n; i++) {
+        const char *name = _dyld_get_image_name(i);
+        if (!image_is_app_bundle(name)) {
+            continue;
+        }
+        const struct mach_header *mh = _dyld_get_image_header(i);
+        if (!mh || mh->magic != MH_MAGIC_64) {
+            continue;
+        }
+        uintptr_t slide = (uintptr_t)_dyld_get_image_vmaddr_slide(i);
+        const struct mach_header_64 *h = (const struct mach_header_64 *)mh;
+        const uint8_t *cmd = (const uint8_t *)h + sizeof(*h);
+
+        for (uint32_t k = 0; k < h->ncmds; k++) {
+            const struct load_command *lc = (const struct load_command *)cmd;
+            if (lc->cmdsize < sizeof(*lc)) {
+                break;
+            }
+            if (lc->cmd == LC_SEGMENT_64) {
+                const struct segment_command_64 *sg =
+                    (const struct segment_command_64 *)lc;
+                if (strncmp(sg->segname, "__TEXT", sizeof(sg->segname)) == 0) {
+                    uintptr_t lo = slide + (uintptr_t)sg->vmaddr;
+                    if (a >= lo && a < lo + (uintptr_t)sg->vmsize) {
+                        return true;
+                    }
+                    break;
+                }
+            }
+            cmd += lc->cmdsize;
+        }
+    }
+    return false;
+}
+
 fn_hook *fn_hook_inline(void *target, void *handler, void **trampoline_out)
 {
     if (!target || !handler) {
+        return NULL;
+    }
+
+    if (!fn_cfg_flag("hook_any", 0) && !addr_in_signed_image(target)) {
+        FNLOG("hook_inline: %p refused, not in an app-bundle image "
+              "(shared cache pages lose execute on restore)", target);
         return NULL;
     }
 
