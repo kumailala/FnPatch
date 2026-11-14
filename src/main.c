@@ -58,15 +58,9 @@ static void log_environment(void)
  * `.old`, a fresh one is written, and the in-memory cache is dropped so the
  * new values apply on this launch, not the next one.
  *
- * Only the modules that cannot plausibly take the process down at boot are on:
- *
- *   uacslot  the kick fix, a data pointer swap, no trampoline
- *   popup    proof the dylib loaded
- *   crash    the reporter
- *   offsets  no-op unless ret0=/ret1= are set
- *
- * Everything else is off. They are all inline hooks, and inline hooks are the
- * thing that was killing the app.
+ * Only three modules exist now, and only two of them are on by default. None
+ * of them patches code, because a code page on this kernel cannot be made
+ * executable again once it has been written.
  */
 static void write_default_config(void)
 {
@@ -103,39 +97,21 @@ static void write_default_config(void)
         "# FnPatch " FN_PATCH_VERSION "\n"
         "version=" FN_PATCH_VERSION "\n"
         "\n"
-        "# 1 = module on, 0 = module off\n"
+        "# The kick fix. A data pointer swap; no code is patched anywhere.\n"
         "uacslot=1\n"
+        "# 0 = skip the signature scan and use this build's known offsets\n"
         "uacslot_scan=1\n"
+        "# codes suppressed when flag==1; overrides the built-in 5,19,23,49\n"
         "# uacslot_codes=5,19,23,49\n"
         "\n"
-        "# Inline hooks. Off until the boot is proven clean, because every one of\n"
-        "# them patches executable memory. Turn one on per launch from here.\n"
-        "codesign=0\n"
-        "csops=0\n"
-        "entitlements=0\n"
-        "fileint=0\n"
-        "hide_provision=0\n"
-        "eos=0\n"
-        "eos_drop_server=0\n"
-        "hide_images=0\n"
-        "\n"
-        "# Removes our LC_LOAD_DYLIB from the in-memory header. Safe but it writes\n"
-        "# to the first page of the main executable's __TEXT; off by default now.\n"
+        "# Removes our LC_LOAD_DYLIB from the in-memory Mach-O header. It writes\n"
+        "# to the first page of the main executable's __TEXT, which on this kernel\n"
+        "# cannot be made executable again afterwards. The page holds no code, so\n"
+        "# it is safe, but it buys nothing for the kick. Off by default.\n"
         "scrub_header=0\n"
         "\n"
-        "offsets=1\n"
         "popup=1\n"
-        "crash=1\n"
-        "\n"
-        "# 1 = allow inline hooks outside the app bundle (dyld shared cache pages).\n"
-        "# Those pages lose execute on restore; leave at 0.\n"
-        "hook_any=0\n"
-        "anon_tramp=0\n"
-        "\n"
-        "# Addresses relative to the main Mach-O header, comma separated.\n"
-        "# ret0 / ret1 -> mov w0,#N ; ret        retvoid -> ret\n"
-        "# ret1=0x123456\n"
-        "# ret0=0x123456,0x654321\n");
+        "crash=1\n");
     fclose(f);
 
     fn_cfg_reload();
@@ -155,42 +131,16 @@ static void fnpatch_init(void)
 
     write_default_config();
 
-    /*
-     * Ask once, on our own padding page, whether this process can ever put
-     * execute back on a page it made writable. The answer decides whether any
-     * inline hook is allowed to run at all.
-     */
-    fn_step("probe");
-    (void)fn_code_patch_available();
-
     fn_step("scrub_header");
     mod_header_scrub_install();
 
     /*
-     * Before everything else that hooks. This module only swaps a data
-     * pointer, so it cannot fail the way an executable-page trampoline does,
-     * and the kick is the one symptom that hides every other one.
+     * The kick fix. A data pointer swap, no code patched, no trampoline, no
+     * executable memory anywhere: this is the only part of the dylib that has
+     * ever been confirmed working on the device.
      */
     fn_step("uacslot");
     mod_uacslot_install();
-
-    fn_step("hide_images");
-    mod_hide_install();
-
-    fn_step("codesign");
-    mod_codesign_install();
-
-    fn_step("entitlements");
-    mod_entitlements_install();
-
-    fn_step("fileint");
-    mod_fileint_install();
-
-    fn_step("eos");
-    mod_eos_install();
-
-    fn_step("offsets");
-    mod_offsets_install();
 
     fn_step("popup");
     mod_popup_install();

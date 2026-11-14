@@ -2,56 +2,38 @@
 #define FNPATCH_HOOK_H
 
 #include <stdbool.h>
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
 /*
- * arm64 inline hook.
+ * Page protection and image addresses. Nothing here patches code.
  *
- * Patch:      ldr x16,#8 ; br x16 ; .quad handler   (16 bytes)
- * Trampoline: relocated original 4 instructions ; ldr x16,#8 ; br x16 ; .quad target+16
+ * Inline hooking was removed in 1.1.0. On the target kernel a signed code page
+ * can be made writable but execute cannot be put back: R|X, R|W|X and
+ * mprotect(PROT_EXEC) all return KERN_PROTECTION_FAILURE. A page treated that
+ * way is left writable and non-executable and faults on the next branch into
+ * it. That is what killed the 1.0.1 build, and there is no way to undo it in
+ * the process, so the only safe number of code writes is zero.
  *
- * Only four instructions are displaced, so the first 16 bytes must be relocatable.
- * ADRP, B.cond, CBZ/CBNZ, TBZ/TBNZ and LDR-literal are rewritten for the new
- * address; a direct B/BL in the prologue is refused rather than miscompiled.
+ * What is left is the data side: making a data page writable long enough to
+ * swap a pointer, and putting it back to read-only.
  */
-typedef struct fn_hook {
-    void     *target;
-    void     *trampoline;
-    uint32_t  saved[4];
-    uint32_t  saved_count;
-} fn_hook;
 
-/* mprotect a code page writable via COW (works on shared-cache pages). */
+/* Make a page writable through VM_PROT_COPY. Returns false if refused. */
 bool fn_vm_writable(void *addr, size_t len);
 
-/* Put a page back to read+execute after a patch. */
-void fn_make_executable(void *addr, size_t len);
-
-/* Same, but reports whether execute was actually restored. A false here means
- * the page is now writable and non-executable and must never be executed. */
+/* Put a code page back to read+execute. Returns false when the kernel refuses;
+ * a false here means the page is now writable and must never be executed. */
 bool fn_make_executable_ok(void *addr, size_t len);
 
-/* One-time probe: can this process restore execute after making a code page
- * writable? False on kernels that refuse it, in which case no inline hook and
- * no prologue patch may be attempted. */
-bool fn_code_patch_available(void);
+/* As above, result ignored. Only for pages that hold no code. */
+void fn_make_executable(void *addr, size_t len);
 
-/* Put a data page back to read-only after a patch. */
+/* Put a data page back to read-only. */
 void fn_make_readonly(void *addr, size_t len);
 
-/* Force `mov w0,#value ; ret` / `ret` over the entry point. */
-bool fn_patch_ret_w0(void *target, int32_t value);
-bool fn_patch_ret_void(void *target);
-
-/* Redirect target to handler. Returns NULL if the prologue cannot be relocated. */
-fn_hook *fn_hook_inline(void *target, void *handler, void **trampoline_out);
-
-/* dlsym on the default handle; NULL when the symbol is absent. */
-void *fn_sym(const char *name);
-
-/* Slide and header of the main executable. */
-uintptr_t fn_main_slide(void);
+/* Header and slide of the main executable. */
 void     *fn_main_header(void);
+uintptr_t fn_main_slide(void);
 
 #endif

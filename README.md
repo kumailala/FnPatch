@@ -31,26 +31,36 @@ There is no EAC framework in the bundle. The stack is:
 
 ## Modules
 
+Three. Only one of them is aimed at the kick.
+
 | module | target | effect |
 |---|---|---|
-| `mod_uacslot` | `UACClient::Send`, vtable entry 35 in `__DATA_CONST` | the message gate: for codes `{5,19,23,49}` sent with `flag==1` it returns true without serialising, queueing or sending. Everything else tail-calls the original. This is the module aimed at the kick |
-| `mod_hide` | `_dyld_image_count` / `_dyld_get_image_name` / `_dyld_get_image_header` | the list is filtered live and indices are remapped, so an index from `count()` is always valid for `name()`/`header()`; FnPatch, Substrate, frida and friends are not there. Off by default |
-| `mod_codesign` | `SecStaticCodeCheckValidity`, `SecCodeCheckValidity`, `…WithErrors`, `MISValidateSignature`, `SecCodeCopySigningInformation`, `csops`, `csops_audittoken` | every signature verdict is success; signing info reports Epic's team. `csops` patching is off by default — it returns an OSStatus without filling the caller's status buffer, so it is opt-in via `patch_csops=1` |
-| `mod_entitlements` | `SecTaskCopyValueForEntitlement`, `SecTaskCopyValuesForEntitlements`, `SecTaskCopySigningIdentifier` | the kernel-side identity reads back as `JPKKQ2FLA9` / `com.epicgames.FortniteGame` |
-| `mod_fileint` | `open`, `openat`, `stat`, `lstat`, `access`, `fopen` | nothing can open or stat the dylib; every integrity-looking path is logged |
-| `mod_eos` | `EOS_AntiCheatClient_PollStatus`, `BeginSession`, `ReceiveMessageFromServer` | violations are forced to `EOS_ACCVT_NoViolation` and the session call returns `EOS_Success`. Server messages pass through untouched unless `eos_drop_server=1`, because starving the handshake invites a different kick |
-| `mod_offsets` | config-driven | `ret0` / `ret1` / `retvoid` address lists for whatever the log points at |
-| `mod_popup` | config-driven (`popup=1`) | one-shot "dylib loaded OK" alert at launch, retried on the main queue until the game has a view controller to present on |
+| `mod_uacslot` | `UACClient::Send`, vtable entry 35 in `__DATA_CONST` | the message gate. For codes `{5,19,23,49}` sent with `flag==1` it returns true without serialising, queueing or sending. Everything else tail-calls the original. This is the kick fix |
+| `mod_header` | the main executable's in-memory Mach-O header | removes our `LC_LOAD_DYLIB` command so a load-command walk sees the stock header. Off by default |
+| `mod_popup` | UIKit | one-shot "dylib loaded OK" alert, proving the image is live |
 
-Genuine values, read out of `Fortnite_43.10.ipa/…/cyan.entitlements`:
+Plus `crash.c`, which is not a module: it arms a fatal-signal reporter that
+writes the signal, the faulting address, every register that matters, the last
+eight steps and a frame-pointer backtrace, with each address labelled by image
+and offset.
 
-```
-team    JPKKQ2FLA9
-app id  JPKKQ2FLA9.com.epicgames.FortniteGame
-bundle  com.epicgames.FortniteGame
-groups  group.com.epicgames.FortniteGame
-        group.com.epicgames.store.shared
-```
+### Why the rest is gone
+
+Earlier builds carried `mod_codesign`, `mod_entitlements`, `mod_fileint`,
+`mod_eos`, `mod_hide` and `mod_offsets`. All six were inline hooks. On the
+target kernel a signed code page can be made writable but execute **cannot** be
+put back afterwards: `vm_protect(R|X)`, `vm_protect(R|W|X)` and
+`mprotect(PROT_EXEC)` all return `KERN_PROTECTION_FAILURE`, leaving the page
+writable and non-executable and guaranteed to fault on the next branch into it.
+
+A device log caught it precisely: `fileint` patched `open()` at `0x114190de0`,
+the restore failed, and the first `open()` call after init took the process
+down. There is no repair for a page in that state, so the only safe number of
+code writes is zero. The modules were deleted rather than disabled; git history
+has them if the kernel behaviour ever changes.
+
+The kick fix never needed them. It cuts the integrity report at the exit rather
+than trying to make a sideloaded signature look like Epic's.
 
 ## Build
 

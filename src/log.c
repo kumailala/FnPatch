@@ -18,8 +18,9 @@ static char            g_log_path[512];
 static char            g_cfg_path[512];
 
 /*
- * fopen is hooked by mod_fileint, which logs through here. Without this the
- * logger would re-enter itself through the hook and blow the stack.
+ * Re-entrancy guard. The logger opens the log with fopen on every line, and
+ * callers include functions that may themselves be logging. One flag per
+ * thread keeps a re-entrant call from recursing until the stack is gone.
  */
 static __thread int g_in_log;
 
@@ -193,3 +194,4 @@ void fn_log(const char *fmt, ...)
 
     g_in_log = 0;
 }
+

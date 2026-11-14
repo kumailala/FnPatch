@@ -27,12 +27,6 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
-      - name: Host harness
-        run: |
-          clang -Isrc -O1 -Wall -Wextra -Wno-unused-parameter \
-            -o hook_test tests/hook_test.c src/log.c
-          ./hook_test
-
       - name: Build FnPatch.dylib
         run: |
           chmod +x build.sh
