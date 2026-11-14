@@ -4,6 +4,8 @@
 #include "config.h"
 
 #include <mach/mach.h>
+#include <mach/mach_vm.h>
+#include <mach/vm_region.h>
 #include <mach-o/loader.h>
 #include <stdatomic.h>
 #include <stdbool.h>

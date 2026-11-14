@@ -36,7 +36,16 @@ jobs:
       - name: Build FnPatch.dylib
         run: |
           chmod +x build.sh
-          ./build.sh FnPatch.dylib
+          if ! ./build.sh FnPatch.dylib > build.log 2>&1; then
+            # Surface compiler errors as check-run annotations: the job log
+            # needs a token to read, annotations do not.
+            grep -E "error:" build.log | head -n 20 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            tail -n 60 build.log
+            exit 1
+          fi
+          tail -n 5 build.log
 
       - name: Strict syntax pass (warnings are errors)
         run: |
