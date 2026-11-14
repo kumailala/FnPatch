@@ -13,15 +13,13 @@
 #include <sys/ucontext.h>
 #include <unistd.h>
 
-/*
- * Fatal-signal reporter.
- *
- * Everything below runs inside a signal handler, so it obeys three rules:
- * no stdio, no malloc, no dyld. The log descriptor, the image table and the
- * step ring are all built at install time and only read here. The unwinder is
- * a frame-pointer walk with hand-written sanity checks rather than libunwind,
- * because libunwind allocates.
- */
+// Fatal-signal reporter.
+//
+// Everything below runs inside a signal handler, so it obeys three rules:
+// no stdio, no malloc, no dyld. The log descriptor, the image table and the
+// step ring are all built at install time and only read here. The unwinder is
+// a frame-pointer walk with hand-written sanity checks rather than libunwind,
+// because libunwind allocates.
 
 #define FN_STEP_MAX      56
 #define FN_STEP_SLOTS    8
@@ -31,12 +29,12 @@
 
 static int  g_fd = -1;
 
-/* Step ring: the last few `fn_step` names, oldest first once wrapped. */
+// Step ring: the last few `fn_step` names, oldest first once wrapped.
 static char   g_steps[FN_STEP_SLOTS][FN_STEP_MAX];
 static int    g_step_count;
 static int    g_step_next;
 
-/* Pre-resolved image ranges, so the handler never calls into dyld. */
+// Pre-resolved image ranges, so the handler never calls into dyld.
 typedef struct {
     uintptr_t lo;
     uintptr_t hi;
@@ -95,7 +93,7 @@ static char *put_dec(char *p, int v)
     return p;
 }
 
-/* "main+0x1234" / "fnpatch+0x88" / "0x18e31a05c". */
+// "main+0x1234" / "fnpatch+0x88" / "0x18e31a05c".
 static char *put_site(char *p, uintptr_t addr)
 {
     for (int i = 0; i < g_image_count; i++) {
@@ -128,12 +126,10 @@ static bool plausible_code(uint64_t a)
     return a > 0x1000 && a < 0x0000FFFFFFFFFFFFULL;
 }
 
-/*
- * Walk x29. Each frame record is {next_fp, return_address}. Bail on anything
- * that cannot be a real record: misalignment, a non-increasing fp, or a slot
- * that points outside user space. A bad walk must never turn one crash into a
- * second one inside the handler.
- */
+// Walk x29. Each frame record is {next_fp, return_address}. Bail on anything
+// that cannot be a real record: misalignment, a non-increasing fp, or a slot
+// that points outside user space. A bad walk must never turn one crash into a
+// second one inside the handler.
 static void dump_backtrace(uintptr_t fp, uintptr_t sp)
 {
     char line[160];
@@ -228,7 +224,7 @@ static void handler(int sig, siginfo_t *si, void *ctx)
     *p++ = '\n';
     wr(buf, (size_t)(p - buf));
 
-    /* Steps oldest -> newest, so the last line is the one that was running. */
+    // Steps oldest -> newest, so the last line is the one that was running.
     int first = g_step_count < FN_STEP_SLOTS ? 0 : g_step_next;
     for (int i = 0; i < g_step_count; i++) {
         int idx = (first + i) % FN_STEP_SLOTS;
@@ -270,7 +266,7 @@ void fn_step(const char *name)
     FNLOG("step: %s", slot);
 }
 
-/* __TEXT of one loaded image, resolved once at install time. */
+// __TEXT of one loaded image, resolved once at install time.
 static bool text_range(const struct mach_header *mh, intptr_t slide,
                        uintptr_t *lo, uintptr_t *hi)
 {
@@ -319,7 +315,7 @@ static void build_image_table(void)
         strncpy(e->name, base, sizeof(e->name) - 1);
         e->name[sizeof(e->name) - 1] = '\0';
 
-        /* Trailing .dylib is noise in a one-word label. */
+        // Trailing .dylib is noise in a one-word label.
         size_t len = strlen(e->name);
         if (len > 6 && strcmp(e->name + len - 6, ".dylib") == 0) {
             e->name[len - 6] = '\0';
@@ -361,11 +357,9 @@ void fn_crash_install(void)
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_sigaction = handler;
-    /*
-     * SA_NODEFER so a fault raised inside this handler is not blocked into a
-     * silent hang: it re-enters once, the write fails, and the second raise
-     * with SIG_DFL still produces a normal system crash report.
-     */
+    // SA_NODEFER so a fault raised inside this handler is not blocked into a
+    // silent hang: it re-enters once, the write fails, and the second raise
+    // with SIG_DFL still produces a normal system crash report.
     sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
     sigemptyset(&sa.sa_mask);
 

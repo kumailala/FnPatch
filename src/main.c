@@ -10,16 +10,14 @@
 #include <string.h>
 #include <strings.h>
 
-/*
- * The bundle identifier is not usable as a gate. Sideloadly rewrites it to a
- * random pair of words (app.passionfruit5910.lavender4318), so Epic's
- * identifier appears on exactly zero sideloaded builds and a match there is
- * never true in the only situation this dylib is used in.
- *
- * The dylib is inserted into one app by hand, so it runs unconditionally and
- * logs what it found, which is also the first line of evidence when something
- * downstream misbehaves.
- */
+// The bundle identifier is not usable as a gate. Sideloadly rewrites it to a
+// random pair of words (app.passionfruit5910.lavender4318), so Epic's
+// identifier appears on exactly zero sideloaded builds and a match there is
+// never true in the only situation this dylib is used in.
+//
+// The dylib is inserted into one app by hand, so it runs unconditionally and
+// logs what it found, which is also the first line of evidence when something
+// downstream misbehaves.
 static void log_environment(void)
 {
     CFBundleRef bundle = CFBundleGetMainBundle();
@@ -48,20 +46,18 @@ static void log_environment(void)
     }
 }
 
-/*
- * Defaults are written once per build, not once per install.
- *
- * The old rule was "write only if the file is absent", which meant a config
- * written by an older build kept steering modules the new build had changed.
- * That is how a `hide_images=1` survived a crash fix. Now the file carries a
- * `version=` line: if it does not match this build the old file is renamed to
- * `.old`, a fresh one is written, and the in-memory cache is dropped so the
- * new values apply on this launch, not the next one.
- *
- * Only three modules exist now, and only two of them are on by default. None
- * of them patches code, because a code page on this kernel cannot be made
- * executable again once it has been written.
- */
+// Defaults are written once per build, not once per install.
+//
+// The old rule was "write only if the file is absent", which meant a config
+// written by an older build kept steering modules the new build had changed.
+// That is how a `hide_images=1` survived a crash fix. Now the file carries a
+// `version=` line: if it does not match this build the old file is renamed to
+// `.old`, a fresh one is written, and the in-memory cache is dropped so the
+// new values apply on this launch, not the next one.
+//
+// Only three modules exist now, and only two of them are on by default. None
+// of them patches code, because a code page on this kernel cannot be made
+// executable again once it has been written.
 static void write_default_config(void)
 {
     const char *path = fn_cfg_path();
@@ -134,11 +130,9 @@ static void fnpatch_init(void)
     fn_step("scrub_header");
     mod_header_scrub_install();
 
-    /*
-     * The kick fix. A data pointer swap, no code patched, no trampoline, no
-     * executable memory anywhere: this is the only part of the dylib that has
-     * ever been confirmed working on the device.
-     */
+    // The kick fix. A data pointer swap, no code patched, no trampoline, no
+    // executable memory anywhere: this is the only part of the dylib that has
+    // ever been confirmed working on the device.
     fn_step("uacslot");
     mod_uacslot_install();
 

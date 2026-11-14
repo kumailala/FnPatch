@@ -17,11 +17,9 @@ static pthread_mutex_t g_log_lock = PTHREAD_MUTEX_INITIALIZER;
 static char            g_log_path[512];
 static char            g_cfg_path[512];
 
-/*
- * Re-entrancy guard. The logger opens the log with fopen on every line, and
- * callers include functions that may themselves be logging. One flag per
- * thread keeps a re-entrant call from recursing until the stack is gone.
- */
+// Re-entrancy guard. The logger opens the log with fopen on every line, and
+// callers include functions that may themselves be logging. One flag per
+// thread keeps a re-entrant call from recursing until the stack is gone.
 static __thread int g_in_log;
 
 static struct { char key[64]; char val[384]; } g_cfg[FN_CFG_MAX_LINES];
@@ -33,11 +31,9 @@ static const char *home_dir(void)
     return h ? h : "/tmp";
 }
 
-/*
- * Everything visible to a human lives in Documents/FnDiag: the app's Documents
- * folder shows up in the Files app for this bundle, so the log and the config
- * are one tap away instead of needing a cable.
- */
+// Everything visible to a human lives in Documents/FnDiag: the app's Documents
+// folder shows up in the Files app for this bundle, so the log and the config
+// are one tap away instead of needing a cable.
 static void init_paths(void)
 {
     char dir[480];
@@ -75,7 +71,7 @@ static void cfg_load(void)
 
     FILE *f = fopen(path, "r");
     if (!f) {
-        /* Older builds wrote the config one level up. */
+        // Older builds wrote the config one level up.
         snprintf(path, sizeof(path), "%s/Documents/FnPatch.config", home_dir());
         f = fopen(path, "r");
     }
@@ -140,8 +136,8 @@ int fn_cfg_flag(const char *key, int fallback)
     return atoi(v);
 }
 
-/* Drop the cache so the next read re-parses the file. Used after the defaults
- * are rewritten, so a stale config cannot survive an update. */
+// Drop the cache so the next read re-parses the file. Used after the defaults
+// are rewritten, so a stale config cannot survive an update.
 void fn_cfg_reload(void)
 {
     g_cfg_count = -1;
@@ -149,10 +145,10 @@ void fn_cfg_reload(void)
 
 void fn_log_init(void)
 {
-    /* fn_log_path() creates Documents/FnDiag and fills g_log_path. */
+    // fn_log_path() creates Documents/FnDiag and fills g_log_path.
     (void)fn_log_path();
 
-    /* Keep the previous run, truncate this one. */
+    // Keep the previous run, truncate this one.
     char prev[520];
     snprintf(prev, sizeof(prev), "%s.1", g_log_path);
     rename(g_log_path, prev);

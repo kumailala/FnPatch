@@ -5,16 +5,14 @@
 #include "log.h"
 #include "config.h"
 
-/*
- * One-shot "the dylib is alive" alert.
- *
- * Presented from a window of our own at alert level rather than from the
- * game's view controller: during launch the game's root controller is usually
- * mid-transition, and a presentation on top of that silently does nothing.
- *
- * The constructor runs before any scene is connected, so it retries once a
- * second until one exists.
- */
+// One-shot "the dylib is alive" alert.
+//
+// Presented from a window of our own at alert level rather than from the
+// game's view controller: during launch the game's root controller is usually
+// mid-transition, and a presentation on top of that silently does nothing.
+//
+// The constructor runs before any scene is connected, so it retries once a
+// second until one exists.
 
 #define FN_POPUP_ATTEMPTS 60
 

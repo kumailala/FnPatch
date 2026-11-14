@@ -13,39 +13,37 @@
 #include <string.h>
 #include <unistd.h>
 
-/*
- * UACClient message-gate, ported from the "Fn kick fix" dylib.
- *
- * The reference does not patch code. It finds one function in __TEXT, then
- * finds the single 8-byte __DATA_CONST slot that holds its address (vtable
- * entry 35 of the UACClient vtable), and swaps that pointer.
- *
- *   1. scan __TEXT for a 33-word signature, branch immediates masked
- *   2. require exactly one hit
- *   3. require exactly one slot in __DATA_CONST equal to that address
- *   4. mach_vm_protect(R|W|COPY) over the slot page, compare-exchange the 8 bytes
- *   5. restore the page's original protection
- *
- * The trampoline is an ordinary function in this dylib, so no executable
- * memory is ever allocated. The earlier boot crash was an anonymous
- * executable page made inside mprotect; nothing here needs one.
- *
- * The hooked method is bool Send(UACClient *self, int code, void *data, bool flag).
- * With flag == 1 it serialises `data`, appends a two-byte tag and a 00 0A
- * trailer, and hands the buffer to the connection at self+0x38. The reference
- * returns true before any of that for a fixed set of codes, so the caller
- * sees success while nothing is validated, queued or sent.
- *
- * This build's LC_UUID (cc0231f5-9202-3ef0-8559-7eecbbcfc27d) does not match
- * the one baked into the reference dylib, so the reference's hardcoded
- * offsets never apply here and it always takes its signature-scan path. The
- * offsets below are for this exact executable and are only a fallback.
- */
+// UACClient message-gate, ported from the "Fn kick fix" dylib.
+//
+// The reference does not patch code. It finds one function in __TEXT, then
+// finds the single 8-byte __DATA_CONST slot that holds its address (vtable
+// entry 35 of the UACClient vtable), and swaps that pointer.
+//
+// 1. scan __TEXT for a 33-word signature, branch immediates masked
+// 2. require exactly one hit
+// 3. require exactly one slot in __DATA_CONST equal to that address
+// 4. mach_vm_protect(R|W|COPY) over the slot page, compare-exchange the 8 bytes
+// 5. restore the page's original protection
+//
+// The trampoline is an ordinary function in this dylib, so no executable
+// memory is ever allocated. The earlier boot crash was an anonymous
+// executable page made inside mprotect; nothing here needs one.
+//
+// The hooked method is bool Send(UACClient *self, int code, void *data, bool flag).
+// With flag == 1 it serialises `data`, appends a two-byte tag and a 00 0A
+// trailer, and hands the buffer to the connection at self+0x38. The reference
+// returns true before any of that for a fixed set of codes, so the caller
+// sees success while nothing is validated, queued or sent.
+//
+// This build's LC_UUID (cc0231f5-9202-3ef0-8559-7eecbbcfc27d) does not match
+// the one baked into the reference dylib, so the reference's hardcoded
+// offsets never apply here and it always takes its signature-scan path. The
+// offsets below are for this exact executable and are only a fallback.
 
-#define FN_UAC_TEXT_OFF  0x7571028ull   /* signature, __TEXT */
-#define FN_UAC_SLOT_OFF  0xce5ad38ull   /* vtable entry 35, __DATA_CONST */
+#define FN_UAC_TEXT_OFF  0x7571028ull   // signature, __TEXT
+#define FN_UAC_SLOT_OFF  0xce5ad38ull   // vtable entry 35, __DATA_CONST
 
-/* arm64, not arm64e: cpusubtype 0. Slots hold plain pointers, no ptrauth. */
+// arm64, not arm64e: cpusubtype 0. Slots hold plain pointers, no ptrauth.
 #define FN_PTR_CANON(p) ((uintptr_t)(p) & 0x0000FFFFFFFFFFFFULL)
 
 typedef struct {
@@ -53,11 +51,9 @@ typedef struct {
     uintptr_t end;
 } fn_range;
 
-/*
- * The 33 words at file 0x7571028, read out of FortniteClient-IOS-Shipping.
- * Words 5, 7, 12, 15, 16, 17, 19, 20, 25, 26, 30 and 32 are bl/b: their
- * displacement is build-specific, so only the top six bits are compared.
- */
+// The 33 words at file 0x7571028, read out of FortniteClient-IOS-Shipping.
+// Words 5, 7, 12, 15, 16, 17, 19, 20, 25, 26, 30 and 32 are bl/b: their
+// displacement is build-specific, so only the top six bits are compared.
 static const uint32_t k_signature[33] = {
     0xd10143ff, 0xa90257f6, 0xa9034ff4, 0xa9047bfd, 0x910103fd,
     0x96bbe7b9, 0x34000143, 0x96bbe656, 0x37000120, 0x52800013,
@@ -73,7 +69,7 @@ static uintptr_t g_slot;
 static uintptr_t g_slot_had;
 static bool      g_installed;
 
-/* Codes suppressed when flag == 1. Config overrides, for tuning without a rebuild. */
+// Codes suppressed when flag == 1. Config overrides, for tuning without a rebuild.
 #define FN_UAC_MAX_CODES 32
 static int32_t g_codes[FN_UAC_MAX_CODES] = { 5, 19, 23, 49 };
 static int     g_code_count = 4;
@@ -135,7 +131,7 @@ static bool segment_range(const char *want, bool file_only, fn_range *out)
     return false;
 }
 
-/* (w & 0x7C000000) == 0x14000000 covers b and bl; anything else is exact. */
+// (w & 0x7C000000) == 0x14000000 covers b and bl; anything else is exact.
 static uint32_t sig_mask(uint32_t w)
 {
     return (w & 0x7C000000u) == 0x14000000u ? 0xFC000000u : 0xFFFFFFFFu;
@@ -152,11 +148,9 @@ static bool sig_matches(const uint32_t *p)
     return true;
 }
 
-/*
- * Returns the address of the single match, or 0 when there is none or more
- * than one. The reference requires exactly one for the same reason: a second
- * match means the scan is no longer describing the function it was built for.
- */
+// Returns the address of the single match, or 0 when there is none or more
+// than one. The reference requires exactly one for the same reason: a second
+// match means the scan is no longer describing the function it was built for.
 static uintptr_t scan_text(const fn_range *text, int *hits_out)
 {
     const uint32_t *base = (const uint32_t *)text->start;
@@ -211,18 +205,16 @@ static int scan_slots(const fn_range *dc, uintptr_t code, uintptr_t *first)
     return hits;
 }
 
-/*
- * VM_PROT_COPY forces a private dirty page, which __DATA_CONST requires: the
- * segment is mapped read-only and clean, so a plain write protect is refused
- * on some kernels and silently shared on others.
- *
- * The restore is read-only, not read+execute. This is a data page; asking for
- * execute on it is the wrong request and can be refused outright.
- *
- * mach_vm_* is not usable here at all: the iOS SDK ships <mach/mach_vm.h> as a
- * stub that errors out by design, so vm_protect from <mach/vm_map.h> does the
- * whole job.
- */
+// VM_PROT_COPY forces a private dirty page, which __DATA_CONST requires: the
+// segment is mapped read-only and clean, so a plain write protect is refused
+// on some kernels and silently shared on others.
+//
+// The restore is read-only, not read+execute. This is a data page; asking for
+// execute on it is the wrong request and can be refused outright.
+//
+// mach_vm_* is not usable here at all: the iOS SDK ships <mach/mach_vm.h> as a
+// stub that errors out by design, so vm_protect from <mach/vm_map.h> does the
+// whole job.
 static bool slot_write(uintptr_t slot, uintptr_t expect, uintptr_t value)
 {
     vm_size_t ps = (vm_size_t)getpagesize();
@@ -383,11 +375,9 @@ void mod_uacslot_install(void)
           (unsigned long)g_slot_had);
 }
 
-/*
- * Put the pointer back before this image goes away. A dylib that unloads with
- * a vtable slot aimed at its own __TEXT leaves the next virtual call branching
- * into an unmapped page, which is a crash with no useful backtrace.
- */
+// Put the pointer back before this image goes away. A dylib that unloads with
+// a vtable slot aimed at its own __TEXT leaves the next virtual call branching
+// into an unmapped page, which is a crash with no useful backtrace.
 __attribute__((destructor))
 static void mod_uacslot_uninstall(void)
 {

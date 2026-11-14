@@ -16,7 +16,7 @@ static size_t page_size_cached(void)
     return cached;
 }
 
-/* Round [addr, addr+len) out to whole pages. */
+// Round [addr, addr+len) out to whole pages.
 static void page_span(void *addr, size_t len, uintptr_t *page, size_t *size)
 {
     size_t ps = page_size_cached();
@@ -40,17 +40,15 @@ bool fn_vm_writable(void *addr, size_t len)
     return true;
 }
 
-/*
- * Read+execute restore, with the fallbacks that exist because the primary
- * request is not always honoured:
- *
- *   1. vm_protect R|X        the correct answer
- *   2. vm_protect R|W|X      keeps execute when R|X is refused
- *   3. mprotect(PROT_EXEC)   a different path to the same protection
- *
- * The return value matters. Callers must treat false as "this page is dead,
- * do not execute anything on it" rather than logging and carrying on.
- */
+// Read+execute restore, with the fallbacks that exist because the primary
+// request is not always honoured:
+//
+// 1. vm_protect R|X        the correct answer
+// 2. vm_protect R|W|X      keeps execute when R|X is refused
+// 3. mprotect(PROT_EXEC)   a different path to the same protection
+//
+// The return value matters. Callers must treat false as "this page is dead,
+// do not execute anything on it" rather than logging and carrying on.
 bool fn_make_executable_ok(void *addr, size_t len)
 {
     uintptr_t page;

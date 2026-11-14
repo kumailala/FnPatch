@@ -6,25 +6,23 @@
 #include <mach-o/loader.h>
 #include <string.h>
 
-/*
- * Hiding the dylib from the loaded-image list is not enough on its own: the
- * injected LC_LOAD_DYLIB is still sitting in the main executable's Mach-O
- * header, and anything that walks the load commands (including a check that
- * never touches dyld) can read it straight out of memory.
- *
- * dyld has already mapped and bound us by the time this runs, so the command
- * can be deleted from the in-memory header. Everything after it is moved down
- * and the tail is zeroed, which leaves the header byte-identical to the stock
- * Mach-O: the injected command was appended to the existing padding, so its
- * removal restores the original layout exactly.
- *
- * The on-disk file is untouched by design; a running process reads its own
- * header from the mapped __TEXT page, not from the container.
- */
+// Hiding the dylib from the loaded-image list is not enough on its own: the
+// injected LC_LOAD_DYLIB is still sitting in the main executable's Mach-O
+// header, and anything that walks the load commands (including a check that
+// never touches dyld) can read it straight out of memory.
+//
+// dyld has already mapped and bound us by the time this runs, so the command
+// can be deleted from the in-memory header. Everything after it is moved down
+// and the tail is zeroed, which leaves the header byte-identical to the stock
+// Mach-O: the injected command was appended to the existing padding, so its
+// removal restores the original layout exactly.
+//
+// The on-disk file is untouched by design; a running process reads its own
+// header from the mapped __TEXT page, not from the container.
 
 static bool is_our_dylib(const struct dylib_command *dc)
 {
-    /* The name is a NUL-terminated string inside the command. */
+    // The name is a NUL-terminated string inside the command.
     if (dc->dylib.name.offset >= dc->cmdsize) {
         return false;
     }
