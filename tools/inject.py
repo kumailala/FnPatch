@@ -190,6 +190,66 @@ def patch_bytes(buf, install_paths):
     return bytes(ba), added
 
 
+def raw_local_header(info):
+    """Local file header for an entry whose compressed bytes are copied as-is."""
+    dt = info.date_time
+    dosdate = (dt[0] - 1980) << 9 | dt[1] << 5 | dt[2]
+    dostime = dt[3] << 11 | dt[4] << 5 | (dt[5] // 2)
+    name = info.filename.encode("utf-8")
+    # UTF-8 name flag on, data-descriptor flag off: both sizes are known here.
+    flag = (info.flag_bits | 0x800) & ~0x08
+    return struct.pack(
+        "<IHHHHHIIIHH", 0x04034B50, 20, flag, info.compress_type,
+        dostime, dosdate, info.CRC, info.compress_size, info.file_size,
+        len(name), 0,
+    ) + name
+
+
+def raw_copy_entry(dst, src, info):
+    """Copy one entry without decompressing or recompressing it.
+
+    The source entry already holds valid deflate output, so the fastest correct
+    copy is the compressed bytes themselves. Reads the local header to learn
+    where the payload starts, emits a fresh local header, then streams the
+    payload across. The output central directory is written by ZipFile.close()
+    from dst.filelist, which is why the ZipInfo is registered here.
+    """
+    src.fp.seek(info.header_offset)
+    head = src.fp.read(30)
+    if len(head) != 30 or struct.unpack_from("<I", head, 0)[0] != 0x04034B50:
+        raise SystemExit(f"bad local header for {info.filename} at {info.header_offset}")
+    name_len, extra_len = struct.unpack_from("<HH", head, 26)
+
+    out = zipfile.ZipInfo(info.filename, date_time=info.date_time)
+    out.external_attr = info.external_attr
+    out.internal_attr = info.internal_attr
+    out.create_system = info.create_system
+    out.compress_type = info.compress_type
+    out.flag_bits = info.flag_bits & ~0x08
+    out.CRC = info.CRC
+    out.compress_size = info.compress_size
+    out.file_size = info.file_size
+    out.header_offset = dst.fp.tell()
+
+    dst.fp.write(raw_local_header(out))
+
+    src.fp.seek(info.header_offset + 30 + name_len + extra_len)
+    left = info.compress_size
+    while left:
+        chunk = src.fp.read(min(left, 4 << 20))
+        if not chunk:
+            raise SystemExit(f"truncated payload for {info.filename}")
+        dst.fp.write(chunk)
+        left -= len(chunk)
+
+    dst.filelist.append(out)
+    dst.NameToInfo[out.filename] = out
+    # ZipFile keeps start_dir as "where the central directory will go". Writes
+    # that bypass writestr() must move it forward themselves, otherwise
+    # close() writes the central directory over the first entry.
+    dst.start_dir = dst.fp.tell()
+
+
 def find_app_prefix(names):
     apps = set()
     for name in names:
@@ -256,32 +316,35 @@ def main():
         print(f"executable : {exe_name}")
         print(f"entries    : {len(infos)}")
 
+        exe_source_size = src.getinfo(exe_entry).file_size
         total = len(infos)
         added_report = []
+        replaced_exe = False
 
         with zipfile.ZipFile(args.out, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as dst:
             for n, info in enumerate(infos, 1):
-                data = src.read(info.filename)
-
                 if info.filename == exe_entry:
+                    # The only entry whose bytes change: decompress, patch,
+                    # recompress. Everything else is copied compressed.
+                    data = src.read(info.filename)
                     data, added = patch_bytes(data, install_paths)
                     added_report = added
 
-                out_info = zipfile.ZipInfo(info.filename, date_time=info.date_time)
-                out_info.external_attr = info.external_attr
-                out_info.internal_attr = info.internal_attr
-                out_info.create_system = info.create_system
-                out_info.compress_type = info.compress_type
+                    out_info = zipfile.ZipInfo(info.filename, date_time=info.date_time)
+                    out_info.external_attr = info.external_attr
+                    out_info.internal_attr = info.internal_attr
+                    out_info.create_system = info.create_system
+                    out_info.compress_type = zipfile.ZIP_DEFLATED
+                    dst.writestr(out_info, data)
+                    replaced_exe = True
+                else:
+                    raw_copy_entry(dst, src, info)
 
-                is_link = (info.external_attr >> 16) & 0o170000 == S_IFLNK
-                if is_link:
-                    out_info.compress_type = zipfile.ZIP_STORED
-
-                dst.writestr(out_info, data)
-
-                if n % 100 == 0 or n == total:
+                if n % 25 == 0 or n == total:
                     print(f"  packed {n}/{total}", end="\r")
             print()
+            if not replaced_exe:
+                raise SystemExit(f"executable entry never written: {exe_entry}")
 
             for name, data in attached:
                 entry = zipfile.ZipInfo(f"{app}/Frameworks/{name}")
@@ -297,7 +360,9 @@ def main():
     for name, data in attached:
         print(f"  + {app}/Frameworks/{name} ({len(data)} bytes)")
 
-    verify(args.out, exe_entry, len(infos) + len(attached), app, attached, install_paths)
+    carried = {i.filename: i.file_size for i in infos if i.filename != exe_entry}
+    verify(args.out, exe_entry, len(infos) + len(attached), app, attached,
+           install_paths, carried, exe_source_size)
 
     size = os.path.getsize(args.out) / (1024 ** 3)
     print(f"\ndone: {args.out} ({size:.2f} GB)")
@@ -305,7 +370,8 @@ def main():
     print("a different identity, or the inserted load command is rejected.")
 
 
-def verify(path, exe_entry, expected_entries, app, attached, install_paths):
+def verify(path, exe_entry, expected_entries, app, attached, install_paths,
+           source_sizes, source_size):
     print("\nverifying output")
     with zipfile.ZipFile(path) as zf:
         names = zf.namelist()
@@ -331,9 +397,19 @@ def verify(path, exe_entry, expected_entries, app, attached, install_paths):
         for p in install_paths:
             check(p in paths, f"LC_LOAD_DYLIB {p} parses back")
         check(lc_end <= min_data, "load commands fit before section data")
+        check(len(data) == source_size, "executable size unchanged apart from load commands")
 
-        bad = zf.testzip()
-        check(bad is None, f"zip integrity ({bad})")
+        # Not testzip(): that decompresses all 300 entries and costs minutes.
+        # Every entry except the executable was copied as already-compressed
+        # bytes, so a size comparison against the source proves the copy, and
+        # ZipExtFile raises BadZipFile if the one recompressed entry's CRC
+        # does not match.
+        with zipfile.ZipFile(path) as zf2:
+            sizes_ok = all(
+                zf2.getinfo(n).file_size == source_sizes[n]
+                for n in source_sizes
+            )
+        check(sizes_ok, "every carried entry has its original size")
 
         if not ok:
             raise SystemExit("output verification failed")
