@@ -4,8 +4,6 @@
 #include "config.h"
 
 #include <mach/mach.h>
-#include <mach/mach_vm.h>
-#include <mach/vm_region.h>
 #include <mach-o/loader.h>
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -217,31 +215,22 @@ static int scan_slots(const fn_range *dc, uintptr_t code, uintptr_t *first)
  * VM_PROT_COPY forces a private dirty page, which __DATA_CONST requires: the
  * segment is mapped read-only and clean, so a plain write protect is refused
  * on some kernels and silently shared on others.
+ *
+ * The protection is restored to VM_PROT_READ rather than to a value read back
+ * out of the region. __DATA_CONST is read-only by definition — that is the
+ * whole reason the segment exists — and vm_region_64 would be one more call
+ * whose only job is to confirm it. mach_vm_* is not usable here at all: the
+ * iOS SDK ships <mach/mach_vm.h> as a stub that errors out by design.
  */
 static bool slot_write(uintptr_t slot, uintptr_t expect, uintptr_t value)
 {
     vm_size_t ps = (vm_size_t)getpagesize();
     uintptr_t page = slot & ~(uintptr_t)(ps - 1);
 
-    mach_vm_address_t region = slot;
-    mach_vm_size_t    region_size = 0;
-    vm_region_basic_info_data_64_t info;
-    mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
-    mach_port_t object = MACH_PORT_NULL;
-
-    kern_return_t kr = mach_vm_region(mach_task_self(), &region, &region_size,
-                                      VM_REGION_BASIC_INFO_64,
-                                      (vm_region_info_t)&info, &count, &object);
+    kern_return_t kr = vm_protect(mach_task_self(), page, ps, false,
+                                 VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
     if (kr != KERN_SUCCESS) {
-        FNLOG("uacslot: mach_vm_region failed at 0x%lx (0x%x)", (unsigned long)slot, kr);
-        return false;
-    }
-    vm_prot_t original = info.protection;
-
-    kr = mach_vm_protect(mach_task_self(), page, ps, false,
-                         VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
-    if (kr != KERN_SUCCESS) {
-        FNLOG("uacslot: mach_vm_protect(RW) failed at 0x%lx (0x%x)", (unsigned long)page, kr);
+        FNLOG("uacslot: vm_protect(RW) failed at 0x%lx (0x%x)", (unsigned long)page, kr);
         return false;
     }
 
@@ -249,10 +238,10 @@ static bool slot_write(uintptr_t slot, uintptr_t expect, uintptr_t value)
     bool swapped = __atomic_compare_exchange_n(cell, &expect, value, false,
                                                __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
 
-    kr = mach_vm_protect(mach_task_self(), page, ps, false, original);
+    kr = vm_protect(mach_task_self(), page, ps, false, VM_PROT_READ);
     if (kr != KERN_SUCCESS) {
-        FNLOG("uacslot: restoring protection 0x%x failed at 0x%lx (0x%x)",
-              (unsigned)original, (unsigned long)page, kr);
+        FNLOG("uacslot: restoring read-only failed at 0x%lx (0x%x)",
+              (unsigned long)page, kr);
     }
 
     if (!swapped) {
