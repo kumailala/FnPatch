@@ -1,7 +1,7 @@
 #ifndef FNPATCH_CONFIG_H
 #define FNPATCH_CONFIG_H
 
-#define FN_PATCH_VERSION "1.0.1"
+#define FN_PATCH_VERSION "1.0.2"
 
 /*
  * Values below are the genuine App Store entitlements read out of

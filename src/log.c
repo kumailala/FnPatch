@@ -124,8 +124,7 @@ const char *fn_cfg_get(const char *key, const char *fallback)
 }
 
 int fn_cfg_flag(const char *key, int fallback)
-{
-    const char *v = fn_cfg_get(key, NULL);
+{    const char *v = fn_cfg_get(key, NULL);
     if (!v) {
         return fallback;
     }
@@ -138,6 +137,13 @@ int fn_cfg_flag(const char *key, int fallback)
         return 0;
     }
     return atoi(v);
+}
+
+/* Drop the cache so the next read re-parses the file. Used after the defaults
+ * are rewritten, so a stale config cannot survive an update. */
+void fn_cfg_reload(void)
+{
+    g_cfg_count = -1;
 }
 
 void fn_log_init(void)

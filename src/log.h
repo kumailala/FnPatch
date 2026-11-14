@@ -19,4 +19,7 @@ const char *fn_cfg_path(void);
 const char *fn_cfg_get(const char *key, const char *fallback);
 int         fn_cfg_flag(const char *key, int fallback);
 
+/* Invalidate the cache; the next read re-parses Documents/FnDiag/FnPatch.config. */
+void        fn_cfg_reload(void);
+
 #endif

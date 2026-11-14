@@ -105,6 +105,28 @@ void fn_make_executable(void *addr, size_t len)
           "next call into it will fault", addr, kr, krw);
 }
 
+/*
+ * Put a data page back to read-only after a patch. Needed because
+ * fn_make_executable adds execute, and __DATA_CONST is a data segment: asking
+ * for R|X there is asking the wrong question, and on a stricter kernel the
+ * request itself is the failure.
+ */
+void fn_make_readonly(void *addr, size_t len)
+{
+    size_t ps = page_size_cached();
+    uintptr_t page = (uintptr_t)addr & ~(uintptr_t)(ps - 1);
+    size_t    off  = (uintptr_t)addr - page;
+    size_t    size = ((off + len + ps - 1) / ps) * ps;
+
+    if (vm_protect(mach_task_self(), page, size, false, VM_PROT_READ) == KERN_SUCCESS) {
+        return;
+    }
+    if (mprotect((void *)page, size, PROT_READ) == 0) {
+        return;
+    }
+    FNLOG("make_readonly: FAILED at %p, page left writable", addr);
+}
+
 static void emit_branch(uint32_t *p, uintptr_t dest)
 {
     p[0] = A64_LDR_X16_8;

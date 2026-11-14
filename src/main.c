@@ -48,48 +48,98 @@ static void log_environment(void)
     }
 }
 
+/*
+ * Defaults are written once per build, not once per install.
+ *
+ * The old rule was "write only if the file is absent", which meant a config
+ * written by an older build kept steering modules the new build had changed.
+ * That is how a `hide_images=1` survived a crash fix. Now the file carries a
+ * `version=` line: if it does not match this build the old file is renamed to
+ * `.old`, a fresh one is written, and the in-memory cache is dropped so the
+ * new values apply on this launch, not the next one.
+ *
+ * Only the modules that cannot plausibly take the process down at boot are on:
+ *
+ *   uacslot  the kick fix, a data pointer swap, no trampoline
+ *   popup    proof the dylib loaded
+ *   crash    the reporter
+ *   offsets  no-op unless ret0=/ret1= are set
+ *
+ * Everything else is off. They are all inline hooks, and inline hooks are the
+ * thing that was killing the app.
+ */
 static void write_default_config(void)
 {
     const char *path = fn_cfg_path();
-    FILE *probe = fopen(path, "r");
-    if (probe) {
-        fclose(probe);
+    char have[64] = "none";
+
+    const char *v = fn_cfg_get("version", NULL);
+    if (v) {
+        snprintf(have, sizeof(have), "%s", v);
+    }
+
+    if (strcmp(have, FN_PATCH_VERSION) == 0) {
         return;
     }
+
+    if (v) {
+        char bak[640];
+        snprintf(bak, sizeof(bak), "%s.old", path);
+        remove(bak);
+        if (rename(path, bak) == 0) {
+            FNLOG("config: stale (version %s), old file kept as FnPatch.config.old", have);
+        } else {
+            remove(path);
+            FNLOG("config: stale (version %s), replaced", have);
+        }
+    }
+
     FILE *f = fopen(path, "w");
     if (!f) {
+        FNLOG("config: cannot write defaults to %s", path);
         return;
     }
-    fputs(
+    fprintf(f,
         "# FnPatch " FN_PATCH_VERSION "\n"
+        "version=" FN_PATCH_VERSION "\n"
+        "\n"
         "# 1 = module on, 0 = module off\n"
         "uacslot=1\n"
-        "# 0 = skip the signature scan and use this build's known offsets\n"
         "uacslot_scan=1\n"
-        "# codes suppressed with flag==1; overrides the built-in 5,19,23,49\n"
         "# uacslot_codes=5,19,23,49\n"
-        "hide_images=0\n"
-        "scrub_header=1\n"
-        "codesign=1\n"
-        "csops=1\n"
-        "entitlements=1\n"
-        "fileint=1\n"
-        "hide_provision=1\n"
-        "eos=1\n"
+        "\n"
+        "# Inline hooks. Off until the boot is proven clean, because every one of\n"
+        "# them patches executable memory. Turn one on per launch from here.\n"
+        "codesign=0\n"
+        "csops=0\n"
+        "entitlements=0\n"
+        "fileint=0\n"
+        "hide_provision=0\n"
+        "eos=0\n"
         "eos_drop_server=0\n"
+        "hide_images=0\n"
+        "\n"
+        "# Removes our LC_LOAD_DYLIB from the in-memory header. Safe but it writes\n"
+        "# to the first page of the main executable's __TEXT; off by default now.\n"
+        "scrub_header=0\n"
+        "\n"
         "offsets=1\n"
         "popup=1\n"
         "crash=1\n"
-        "# 1 = allow inline hooks outside the app bundle (shared-cache pages).\n"
-        "# Those pages lose execute on restore on this kernel; leave at 0.\n"
+        "\n"
+        "# 1 = allow inline hooks outside the app bundle (dyld shared cache pages).\n"
+        "# Those pages lose execute on restore; leave at 0.\n"
         "hook_any=0\n"
+        "anon_tramp=0\n"
         "\n"
         "# Addresses relative to the main Mach-O header, comma separated.\n"
         "# ret0 / ret1 -> mov w0,#N ; ret        retvoid -> ret\n"
         "# ret1=0x123456\n"
-        "# ret0=0x123456,0x654321\n",
-        f);
+        "# ret0=0x123456,0x654321\n");
     fclose(f);
+
+    fn_cfg_reload();
+    FNLOG("config: wrote defaults for " FN_PATCH_VERSION);
 }
 
 __attribute__((constructor))

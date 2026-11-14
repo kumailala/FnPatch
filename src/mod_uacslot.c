@@ -216,11 +216,12 @@ static int scan_slots(const fn_range *dc, uintptr_t code, uintptr_t *first)
  * segment is mapped read-only and clean, so a plain write protect is refused
  * on some kernels and silently shared on others.
  *
- * The protection is restored to VM_PROT_READ rather than to a value read back
- * out of the region. __DATA_CONST is read-only by definition — that is the
- * whole reason the segment exists — and vm_region_64 would be one more call
- * whose only job is to confirm it. mach_vm_* is not usable here at all: the
- * iOS SDK ships <mach/mach_vm.h> as a stub that errors out by design.
+ * The restore is read-only, not read+execute. This is a data page; asking for
+ * execute on it is the wrong request and can be refused outright.
+ *
+ * mach_vm_* is not usable here at all: the iOS SDK ships <mach/mach_vm.h> as a
+ * stub that errors out by design, so vm_protect from <mach/vm_map.h> does the
+ * whole job.
  */
 static bool slot_write(uintptr_t slot, uintptr_t expect, uintptr_t value)
 {
@@ -238,11 +239,7 @@ static bool slot_write(uintptr_t slot, uintptr_t expect, uintptr_t value)
     bool swapped = __atomic_compare_exchange_n(cell, &expect, value, false,
                                                __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
 
-    kr = vm_protect(mach_task_self(), page, ps, false, VM_PROT_READ);
-    if (kr != KERN_SUCCESS) {
-        FNLOG("uacslot: restoring read-only failed at 0x%lx (0x%x)",
-              (unsigned long)page, kr);
-    }
+    fn_make_readonly((void *)slot, sizeof(uintptr_t));
 
     if (!swapped) {
         FNLOG("uacslot: compare-exchange lost, slot now 0x%lx",
